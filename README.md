@@ -26,7 +26,7 @@ npm start
 
 ### User manual
 
-[Shadow Widget User Manual](https://rewgt.github.io/shadow-widget/doc_zh/)
+<a target="_blank" href="https://rewgt.github.io/shadow-server/public/static/files/rewgt/doc/doc_zh/github_doc.html">Shadow Widget User Manual</a>
 
 ### BSD License
 

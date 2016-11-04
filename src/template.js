@@ -235,7 +235,7 @@ function getElementKey_(child) {
   }
   else return s;
 }
-creator.getElementKey = getElementKey_;
+utils.keyOfElement = getElementKey_;
 
 function getRefProp_(sourProp) {
   var dProp = {};
@@ -3361,6 +3361,8 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
         delete dProp.left;
         delete dProp.top;
       }
+      if (dProp.style && Object.keys(dProp.style).length == 0)
+        delete dProp.style;
       
       // step 2: scan children
       var bSubRet = [];
@@ -4606,9 +4608,10 @@ function pageCtrl_(bPage) {
   bPage.forEach( function(item,idx) {
     keys.push(item[0] + '');
     
-    var page = item[1], dStyle = Object.assign({},page.state.style);
-    dStyle.display = idx == pageIndex? 'block': 'none';
-    page.setState({style:dStyle});
+    var page = item[1];
+    var sShow = idx == pageIndex? 'block': 'none';
+    if (page.state.style.display !== sShow)
+      page.duals.style = {display:sShow};
     
     var sName = page.props.name;
     if (sName && typeof sName == 'string') namedPage[sName] = idx;
@@ -4616,36 +4619,56 @@ function pageCtrl_(bPage) {
   
   var wd = window.innerWidth, wd2 = Math.max(Math.floor(wd/20),20);
   var leftPanel = document.createElement('div');
-  leftPanel.setAttribute('style','position:absolute; left:0px; top:0px; width:' + wd2 + 'px; height:100%; z-index:3000;');
+  leftPanel.setAttribute('style','position:absolute; left:0px; top:0px; width:' + wd2 + 'px; height:100%; background-color:#000; opacity:0; z-index:3000;');
   document.body.appendChild(leftPanel);
   var rightPanel = document.createElement('div');
-  rightPanel.setAttribute('style','position:absolute; right:0px; top:0px; width:' + wd2 + 'px; height:100%; z-index:3000;');
+  rightPanel.setAttribute('style','position:absolute; right:0px; top:0px; width:' + wd2 + 'px; height:100%; background-color:#000; opacity:0; z-index:3000;');
   document.body.appendChild(rightPanel);
   
   this.leftPanel  = leftPanel;
   this.rightPanel = rightPanel;
   
   var self = this;
-  leftPanel.addEventListener('click', function(event) {
+  leftPanel.onclick = function(event) {
     self.prevPage();
-  },false);
-  rightPanel.addEventListener('click', function(event) {
+  };
+  rightPanel.onclick = function(event) {
     self.nextPage();
-  },false);
-  leftPanel.addEventListener('mouseover',mouseover,false);
-  leftPanel.addEventListener('mouseout',mouseout,false);
-  rightPanel.addEventListener('mouseover',mouseover,false);
-  rightPanel.addEventListener('mouseout',mouseout,false);
+  };
+  leftPanel.onmouseover  = mouseover;
+  leftPanel.onmouseout   = mouseout;
+  rightPanel.onmouseover = mouseover;
+  rightPanel.onmouseout  = mouseout;
   
   function mouseover(event) {
-    event.target.style.backgroundColor = 'rgba(0,0,0,0.08)';
+    event.target.style.opacity = '0.1';
   }
   function mouseout(event) {
-    event.target.style.backgroundColor = '';
+    event.target.style.opacity = '0';
   }
 }
 
 pageCtrl_.prototype = {
+  gotoPage_: function(keys,pgIndex) {
+    var sFirstSeg = '', jumpedWdgt = null;
+    keys.forEach( function(sKey,idx) {
+      var wdgt = topmostWidget_ && topmostWidget_[sKey];
+      var comp = wdgt && wdgt.component;
+      if (comp) {
+        var sCss = 'none';
+        if (idx == pgIndex) {
+          sCss = 'block';
+          sFirstSeg = sKey;
+          jumpedWdgt = wdgt;
+        }
+        if (comp.state.style.display != sCss)
+          comp.duals.style = {display:sCss};
+      }
+    });
+    if (jumpedWdgt) this.pageIndex = pgIndex;  // modify when it real shift
+    return [sFirstSeg,jumpedWdgt];
+  },
+  
   gotoPage: function(pgIndex,callback) {
     var sFirstSeg = '', sLeftSeg = '', jumpedWdgt = null;
     
@@ -4691,31 +4714,16 @@ pageCtrl_.prototype = {
     }
     // pgIndex is number by now
     
-    var keys = this.keys;
+    var iLen = this.keys.length;
+    if (!iLen) return doCallback(); // invalid
+    if (pgIndex >= iLen)
+      pgIndex = iLen - 1;
     if (pgIndex < 0)
       pgIndex = 0;
-    if (pgIndex >= keys.length)
-      pgIndex = keys.length - 1;
     
-    keys.forEach( function(sKey,idx) {
-      var wdgt = topmostWidget_ && topmostWidget_[sKey];
-      var comp = wdgt && wdgt.component;
-      if (comp) {
-        var sCss = 'none';
-        if (idx == pgIndex) {
-          sCss = 'block';
-          sFirstSeg = sKey;
-          jumpedWdgt = wdgt;
-        }
-        
-        if (comp.state.style.display != sCss)
-          comp.setState({style:Object.assign({},comp.state.style,{display:sCss})});
-      }
-    });
-    
-    if (jumpedWdgt)       // success
-      this.pageIndex = pgIndex;
-    else sLeftSeg = '';   // failed // sFirstSeg is ''
+    var b = this.gotoPage_(this.keys,pgIndex);
+    sFirstSeg = b[0]; jumpedWdgt = b[1];
+    if (!jumpedWdgt) sLeftSeg = ''; // failed, sFirstSeg must be ''
     doCallback();
   },
   
@@ -4820,7 +4828,11 @@ W.$main.$$onLoad_ = function(designCallback) {
             W.$main.inRunning = true;
             
             var sHash = window.location.hash;
-            if (sHash) utils.gotoHash(sHash);  // no callback
+            if (sHash) {
+              setTimeout( function() {
+                utils.gotoHash(sHash);  // no callback, let main.$onLoad run first
+              },300);
+            }
           }
         },0);
       });
@@ -5690,7 +5702,7 @@ class TWidget_ {
           refreshFrame();
         }; // only topmost widget has onWinResize
         
-        this.duals.style = {position:'absolute'};  // fix to absolute
+        this.duals.style = Object.assign({},this.props.style,{position:'absolute'}); // fix to absolute
         this.duals.left = frameInfo.leftWd;        // props.left will be ignored
         this.duals.top = frameInfo.topHi;
         ownerWd = Math.max(100,window.innerWidth - frameInfo.leftWd - frameInfo.rightWd);
@@ -5749,7 +5761,8 @@ class TWidget_ {
           
           if (!isPanelWdgt) {
             var dProp = Object.assign({},child.props);
-            dProp['keyid.'] = keyid; dProp.key = sKey;
+            // dProp['keyid.'] = keyid;
+            dProp.key = sKey;
             if (W.__design__ && !(thisObj.props['$for'] || thisObj.props['$$for'])) {
               dProp.onMouseDown = staticMouseDown;
               dProp.onDoubleClick = staticDbClick.bind(thisObj);
@@ -5864,8 +5877,8 @@ class TWidget_ {
           }
           
           if (isScenePage) {
-            var dStyle2 = Object.assign({},child.props.style);
-            dStyle2.zIndex = (parseInt(dStyle2.zIndex) || 0) + ''; // 'auto' --> '0' 
+            var dStyle2 = Object.assign({},child.props.style), sLevel = (parseInt(dStyle2.zIndex) || 0) + '';
+            if (sLevel !== '0') dStyle2.zIndex = sLevel;
             props.style = dStyle2;
           }
           else {
@@ -6911,10 +6924,10 @@ class TWidget_ {
       iBrdB = percentPx(parentWd, wgtBorder[2]);
       iBrdL = percentPx(parentWd, wgtBorder[3]);
       sBorderWd = iBrdT + 'px ' + iBrdR + 'px ' + iBrdB + 'px ' + iBrdL + 'px';
-      iMrgT = percentPx(parentWd, wgtMargin[0]);
-      iMrgR = percentPx(parentWd, wgtMargin[1]);
-      iMrgB = percentPx(parentWd, wgtMargin[2]);
-      iMrgL = percentPx(parentWd, wgtMargin[3]);
+      iMrgT = percentPx(parentWd, wgtMargin[0],true);
+      iMrgR = percentPx(parentWd, wgtMargin[1],true);
+      iMrgB = percentPx(parentWd, wgtMargin[2],true);
+      iMrgL = percentPx(parentWd, wgtMargin[3],true);
       sMargin = iMrgT + 'px ' + iMrgR + 'px ' + iMrgB + 'px ' + iMrgL + 'px';
     }
     
@@ -7117,7 +7130,7 @@ class TPanel_ extends TWidget_ {
     var dState = super.getInitialState();
     if (this.widget && this.widget.parent === topmostWidget_) { // direct under W.body
       if ((this.props.left || 0) > 0 || (this.props.top || 0) > 0)
-        this.duals.style = {position:'absolute'};
+        this.duals.style = Object.assign({},this.props.style,{position:'absolute'});
     }
     return dState;
   }
@@ -7159,7 +7172,7 @@ class TUnit_ extends TWidget_ {
   getInitialState() {
     var dState = super.getInitialState();
     if (this.widget && this.widget.parent === topmostWidget_) // direct under W.body
-      this.duals.style = {position:'absolute'};
+      this.duals.style = Object.assign({},this.props.style,{position:'absolute'});
     return dState;
   }
 }
@@ -9059,7 +9072,8 @@ class TSpan_ extends TWidget_ {
           }
           
           var dProp = Object.assign({},child.props);
-          dProp['keyid.'] = keyid; dProp.key = sKey;
+          // dProp['keyid.'] = keyid;
+          dProp.key = sKey;
           if (W.__design__ && !(thisObj.props['$for'] || thisObj.props['$$for'])) {
             dProp.onMouseDown = staticMouseDown;
             dProp.onDoubleClick = staticDbClick.bind(thisObj);
@@ -11582,13 +11596,14 @@ class TTempPanel_ extends TPanel_ {
     
     checkForIfElse_(this.$gui);
     this.isLibGui = false;
+    var style_ = this.props.style;
     if (this.props['hookTo.'] === topmostWidget_) {
-      this.duals.style = {position:'absolute'};
+      this.duals.style = style_ = Object.assign({},style_,{position:'absolute'});
       if ((this.$gui.keyid+'').startsWith('$$')) this.isLibGui = true;
     }
     
     if (W.__design__ && !this.isLibGui) {
-      this.duals.style = {display:'none'}; // default hide it
+      this.duals.style = Object.assign({},style_,{display:'none'}); // default hide it
       setupTemplateTree(this);
     }
     else { // not in __design__, show zero width-height
@@ -11651,13 +11666,14 @@ class TTempDiv_ extends TUnit_ {
     
     checkForIfElse_(this.$gui);
     this.isLibGui = false;
+    var style_ = this.props.style;
     if (this.props['hookTo.'] === topmostWidget_) {
-      this.duals.style = {position:'absolute'};
+      this.duals.style = style_ = Object.assign({},style_,{position:'absolute'});
       if ((this.$gui.keyid+'').startsWith('$$')) this.isLibGui = true;
     }
     
     if (W.__design__ && !this.isLibGui) {
-      this.duals.style = {display:'none'};  // default hide it
+      this.duals.style = Object.assign({},style_,{display:'none'});  // default hide it
       setupTemplateTree(this);
     }
     else {
@@ -11713,7 +11729,7 @@ class TTempSpan_ extends TSpan_ {
     checkForIfElse_(this.$gui);
     this.isLibGui = false;  // fixed to false
     if (W.__design__) {
-      this.duals.style = {display:'none'};  // default hide it
+      this.duals.style = Object.assign({},this.props.style,{display:'none'});  // default hide it
       setupTemplateTree(this);
     }
     else {
@@ -11872,8 +11888,8 @@ class TScenePage_ extends TPanel_ {
     if (this.props['hookTo.'] !== topmostWidget_)
       utils.instantShow('error: ScenePage only hook to topmost widget.');
     
-    var initStyle = {position:'absolute',display:'none'}; // fixed to absolute, default hidden
-    if (!this.props.zIndex)
+    var initStyle = Object.assign({},this.props.style,{position:'absolute',display:'none'}); // fixed to absolute, default hidden
+    if (!initStyle.zIndex)
       initStyle.zIndex = '0'; // default is 0
     this.duals.style = initStyle;
     
@@ -11913,7 +11929,7 @@ class TScenePage_ extends TPanel_ {
           childObj.setState({style:Object.assign({},childObj.state.style,{zIndex:iLevel+2000})});
       }
       else {  // restore to normal
-        if (iLevel >= 1001 && iLevel <= 2999)
+        if (iLevel >= 1000 && iLevel <= 2999)
           childObj.setState({style:Object.assign({},childObj.state.style,{zIndex:iLevel-2000})});
       }
     }
@@ -11980,10 +11996,10 @@ class TMaskPanel_ extends TPanel_ {
         this.state.top = 0;
         this.state.width = iTotalWd - frameInfo.leftWd - frameInfo.rightWd;
         this.state.height = iTotalHi - frameInfo.topHi - frameInfo.bottomHi;
-        this.state.style = { position: 'absolute',
+        this.state.style = Object.assign({},this.state.style,{ position: 'absolute',
           zIndex: 'auto',  // same as parent (3016)
           backgroundColor: popOption.maskColor || 'rgba(238,238,238,0.84)',
-        };
+        });
         
         // step 2: try add frame widget
         var stWd = this.state.width, stHi = this.state.height;

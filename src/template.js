@@ -8,7 +8,7 @@ var T = W.$templates, utils = W.$utils, ex = W.$ex;
 var idSetter = W.$idSetter, creator = W.$creator;
 
 utils.version = function() {
-  return '0.0.3';
+  return '0.0.4';
 };
 
 var vendorId_ = (function(sUA) {

@@ -1,4 +1,4 @@
-// shadow-widget ver 0.0.3
+// shadow-widget ver 0.0.4
 // for cdn package of shadow-widget, exclude react & react-dom
 // package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ es2015 react ] ]
 
@@ -2347,7 +2347,7 @@ var idSetter = W.$idSetter,
     creator = W.$creator;
 
 utils.version = function () {
-  return '0.0.3';
+  return '0.0.4';
 };
 
 var vendorId_ = function (sUA) {

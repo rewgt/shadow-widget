@@ -11,6 +11,35 @@ utils.version = function() {
   return '0.0.2';
 };
 
+var vendorId_ = (function(sUA) {
+  var m = sUA.match(/trident.*rv[ :]*([\d.]+)/); // >= IE11, can not use sUA.match(/msie ([\d.]+)/)
+  if (m) {
+    if (parseFloat(m[1]) >= 11.0)
+      return ['ie',m[1]];
+  }
+  else {
+    m = sUA.match(/firefox\/([\d.]+)/);
+    if (m) return ['firefox',m[1]];
+    
+    m = sUA.match(/chrome\/([\d.]+)/);
+    if (m) return ['chrome',m[1]];
+    
+    m = sUA.match(/opera.([\d.]+)/);
+    if (m) return ['opera',m[1]];
+    
+    m = sUA.match(/safari\/([\d.]+)/);
+    if (m) return ['safari',m[1]];
+    
+    m = sUA.match(/webkit\/([\d.]+)/);
+    if (m) return ['webkit',m[1]];
+  }
+  
+  if (sUA.match(/msie ([\d.]+)/))
+    return ['ie',''];  // IE 10 or lower, no version number because I hate it!
+  else return ['','']; // unknown browser
+})(window.navigator.userAgent.toLowerCase());
+
+utils.vendorId = vendorId_;
 utils.dragInfo = { inDragging: false, justResized: false };
 
 var containNode_      = null;
@@ -32,9 +61,9 @@ var ReferenceProps_ = { '$': true, styles: true,
 
 var ctrlExprCmd_ = ['for','if','elif','else'];
 
-function htmlEncode(s) {
-  return s.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');  // "
-}
+/* function htmlEncode(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+} */
 
 function keyOfNode_(node) {
   if (!getKeyFromNode_) {
@@ -194,6 +223,26 @@ utils.removeClass = function(comp, cls, bAdd) {
   return false;   // not changed
 };
 
+function setClass_(comp, cls) {
+  var bCls = Array.isArray(cls) ? cls: String(cls).split(/ +/);
+  
+  var bRmv = [], bAdd = [];
+  for (var i = bCls.length - 1; i >= 0; i--) {
+    var sCls = bCls[i];
+    if (sCls) {
+      var ch = sCls[0];
+      if (ch == '-')
+        bRmv.unshift(sCls.slice(1));
+      else if (ch == '+')
+        bAdd.unshift(sCls.slice(1));
+      else bAdd.unshift(sCls);
+    }
+  }
+  
+  return utils.removeClass(comp,bRmv,bAdd);
+}
+utils.setClass = setClass_;
+
 var S123456_ = ['S1','S2','S3','S4','S5','S6'];
 
 utils.mergeClass = function(comp, cls) {
@@ -311,11 +360,151 @@ function setupRenderProp_(comp,dStyle) {
 }
 utils.setupRenderProp = setupRenderProp_;
 
+function fireTrigger_(oldData,comp) {
+  // step 1: get trigger data
+  if (arguments.length >= 3) {
+    var value = arguments[2], isOK = false;
+    if (value) {
+      var tp = typeof value;
+      if (tp == 'string') {
+        value = [value];
+        isOK = true;
+      }
+      else if (tp == 'object') {
+        if (Array.isArray(value)) {
+          var modifier;
+          if (typeof value[0] == 'string' && (typeof (modifier=value[1]) == 'object')) {
+            if (typeof modifier.$trigger != 'string') // value is [sPath,modifier]
+              value = [value];
+            // else, value is action array, use it, not copy by value.slice(0)
+          }
+          // else, value is action array
+          isOK = true;
+        }
+        else if (typeof value.$trigger == 'string') { // newOpt for pop window
+          isOK = true;
+          value = [value];
+        }
+      }
+    }
+    if (isOK)
+      comp.duals.trigger = value;
+    else {
+      console.log('warning: invalid trigger data (key=' + comp.$gui.keyid + ')');
+      return;  // ignore
+    }
+  }
+  else { // reuse comp.duals.trigger, try update $trigger first
+    var gui = comp.$gui, syncId = gui.syncTrigger;
+    if (syncId && syncId > 1) {    // gui.syncTrigger=1 means no reverse fire $trigger
+      if (syncId < identicalId_) { // need re-eval $trigger, must not in $trigger evaluating
+        var fn = gui.exprAttrs.trigger;
+        if (fn) {
+          try {
+            gui.syncTrigger = 2;   // avoid re-call fireTrigger_()
+            fn(comp); // auto renew gui.syncTrigger, and auto assign duals.trigger
+          }
+          catch(e) {
+            console.log(e);
+          }
+        }
+      }
+      else gui.syncTrigger = 3;    // from $trigger evaluating, let next can fire
+    }
+  }
+  
+  setTimeout( function() { // maybe 'duals.trigger = xx' just called, run in next tick
+    if (!comp.isHooked) return;
+    if (oldData === comp.state.trigger)
+      return;              // maybe data not change and not isForce
+    fireOptTrigger_(comp); // if comp.state.trigger not array, will be ignored
+  },0);
+  
+  function fireOptTrigger_(thisObj) {
+    var bRet = thisObj.state.trigger;
+    if (!Array.isArray(bRet)) return;  // unknown format
+    
+    bRet = bRet.slice(0);         // copy it
+    var item = bRet.shift();
+    while (item) {
+      var sPath2, tp2 = typeof item;
+      if (tp2 == 'string')
+        triggerCheck(item,null);  // item must not '' // can not trigger self
+      else if (tp2 == 'object') {
+        if (Array.isArray(item))
+          triggerData(item[0] || '',item[1],item[2] || 'data'); // update duals.data
+        else if (typeof (sPath2=item.$trigger) == 'string') {
+          var cfgData = Object.assign({},item);
+          delete cfgData.$trigger;
+          triggerCheck(sPath2,cfgData);
+        }
+        else break; // unexpected, no warning
+      }
+      else break;   // unexpected, no warning
+      
+      item = bRet.shift();
+    }
+    
+    function triggerData(sPath,modifier,sAttr) {
+      if (typeof sPath != 'string' || !modifier) return;
+      
+      var targ = sPath? getCompByPath_(thisObj,sPath): thisObj;
+      if (!targ) {
+        console.log('warning: can not find target (' + sPath + ')');
+        return;
+      }
+      if (!targ.duals.hasOwnProperty(sAttr)) return;  // ignore, no warning
+      
+      setTimeout( function() {
+        targ.duals[sAttr] = ex.update(targ.duals[sAttr],modifier);
+      },0);
+    }
+    
+    function triggerCheck(sPath,cfgData) {
+      var dCfg = undefined;
+      if (cfgData && typeof cfgData == 'object')
+        dCfg = cfgData;
+      
+      setTimeout( function() {
+        var targ = sPath? getCompByPath_(thisObj,sPath): thisObj;
+        if (!targ) {
+          console.log('warning: can not find target (' + sPath + ')');
+          return;
+        }
+        if (targ === thisObj) {
+          console.log('warning: trigger can not fire widget itself.');
+          return;
+        }
+        
+        if (targ.props['isOption.'] && targ.setChecked)
+          targ.setChecked(null,dCfg);  // callback is null
+      },0);
+    }
+  }
+}
+utils.fireTrigger = function(comp) {
+  if (arguments.length >= 2)
+    fireTrigger_(undefined,comp,arguments[1]);
+  else fireTrigger_(undefined,comp);
+};
+
 utils.setChildren = function(comp,children,callback) {
   if (!Array.isArray(children)) return; // fatal error
   
+  var bChild = [], argLen = children.length;
+  for (var i = 0; i < argLen; i++) {
+    var item = children[i];
+    if (Array.isArray(item))
+      loadReactTreeEx_(bChild, item, W.$staticNodes, W.$cachedClass);
+    else if (typeof item == 'string')
+      bChild.push(React.createElement(comp.props['childInline.']?Span__:P__,{'html.':item})); // item maybe ''
+    else if (React.isValidElement(item))
+      bChild.push(item);
+    // else, unknown format, ignore it
+  }
+  
   var gui = comp.$gui, existNum = 0, rmvEx = 0;
-  children.forEach( function(item,idx) {
+  bChild.forEach( function(item,idx) {
     if (!item) return;
     
     var keyid, sKey = getElementKey_(item);
@@ -332,22 +521,25 @@ utils.setChildren = function(comp,children,callback) {
     }
     else {
       rmvEx += 1;
-      return; // ignore clone, change removeNum wait to rescan
+      return; // ignore clone, change removeNum wait to rescan that will clone 'keyid.'
     }
     
-    children[idx] = React.cloneElement(item,{'keyid.':keyid,key:sKey});
+    bChild[idx] = React.cloneElement(item,{'keyid.':keyid,key:sKey});
   });
   
   // gui.removeNum only can increase, can not decrease
   gui.removeNum += Math.max(0,gui.comps.length - existNum) + rmvEx;
-  gui.comps = children;
+  gui.comps = bChild;
   
   if (!gui.inSync) {
-    if (gui.compState >= 2)
-      comp.setState({id__:identicalId()},callback);   // trigger re-render
+    if (gui.compState >= 2) {
+      var newId = comp.state.id__ === identicalId_? identicalId(): identicalId_;
+      comp.setState({id__:newId},callback);   // trigger re-render
+    }
     else { // maybe duals.id__ == 1
       setTimeout( function() {
-        comp.setState({id__:identicalId()},callback); // trigger re-render
+        var newId = comp.state.id__ === identicalId_? identicalId(): identicalId_;
+        comp.setState({id__:newId},callback); // trigger re-render
       },0);
     }
   }
@@ -378,7 +570,7 @@ function getTemplate_(sName) {
   return temp;
 }
 
-utils.getWTC = function(cls) {  // getWTC('*') getWTC('usr.*') getWTC(['*','Panel','usr.Submit','usr2.*'])
+function getWTC_(cls) {  // getWTC('*') getWTC('usr.*') getWTC(['*','Panel','usr.Submit','usr2.*'])
   var ret = {}, tp = typeof cls;
   
   if (tp == 'string') {
@@ -426,7 +618,7 @@ utils.getWTC = function(cls) {  // getWTC('*') getWTC('usr.*') getWTC(['*','Pane
     for (var i = 0; i < iLen; i += 1) {
       var item = cls[i];
       if (item && typeof item == 'string')
-        Object.assign(ret,utils.getWTC(item));
+        Object.assign(ret,getWTC_(item));
     }
   }
   // else, ignore
@@ -448,7 +640,33 @@ utils.getWTC = function(cls) {  // getWTC('*') getWTC('usr.*') getWTC(['*','Pane
       }
     });
   }
+}
+utils.getWTC = getWTC_;
+
+var browserVendorPrefix_ = {
+  ie: 'ms',
+  firefox: 'Moz',
+  opera: 'O',
+  chrome: 'Webkit',
+  safari: 'Webkit',
+  webkit: 'Webkit',
 };
+
+ex.regist('vendor', function() {
+  return browserVendorPrefix_[vendorId_[0]] || '';
+});
+
+ex.regist('vendorId', function() {
+  return '-' + (browserVendorPrefix_[vendorId_[0]] || '').toLowerCase() + '-';
+});
+
+ex.regist('__design__', function() {
+  return parseInt(W.__design__ || 0);
+});
+
+ex.regist('__debug__', function() {
+  return parseInt(W.__debug__ || 0);
+});
 
 ex.regist('time', function(tm) {
   var t;
@@ -485,38 +703,20 @@ ex.regist('unescape', function(s) {
 ex.regist('evalInfo', function() {  // return [comp,sKey,iTimeId] or undefined
   var ret = undefined;
   var comp = this.component;
-  if (!comp) return ret;
+  if (!comp) return ret;  // return undefined
   
   var wdgt = comp.widget, callspace = wdgt && wdgt.$callspace;
-  var bTrigger = comp.$gui.triggerInfo; // for trigger='...'
-
   if (callspace) {
     ret = callspace.exprSpace.$info;
-    
-    if (Array.isArray(bTrigger)) {
-      var ret2 = bTrigger[0].$info;    // bTrigger[0] is space
-      if (!ret)
-        ret = ret2;
-      else {
-        if (ret2 && ret2[2] >= ret[2]) // choose newest one (large iTimeId)
-          ret = ret2;  // use trigger's info
-      }
-    }
-    
     if (callspace.forSpace) {
-      var ret3 = callspace.forSpace.exprSpace.$info;
+      var ret2 = callspace.forSpace.exprSpace.$info;
       if (ret) {
-        if (ret3 && ret3[2] >= ret[2]) // choose newest one
-          ret = ret3;
+        if (ret2 && ret2[2] >= ret[2]) // choose newest one
+          ret = ret2;
       }
-      else ret = ret3;
+      else ret = ret2;
     }
   }
-  else {
-    if (Array.isArray(bTrigger))
-      ret = bTrigger[0].$info;
-  }
-  
   return ret;
 });
 
@@ -603,29 +803,31 @@ ex.regist('setChecked', function(sPath,newOpt) {
   if (comp) {
     var targ = getCompByPath_(comp,sPath);
     if (targ && targ.props['isOption.'])
-      targ.setChecked(null,false,newOpt); // callback=null, force=false
+      targ.setChecked(null,newOpt); // callback=null
   }
 });
+
+function getCurrExprSpace_(ex,comp) {
+  var wdgt = comp && comp.widget;
+  var callspace = wdgt && wdgt.$callspace;
+  if (callspace) {
+    if (callspace.forSpace) {
+      var info = ex.evalInfo();
+      if (info && info[1] == 'for')  // in for-expr
+        callspace = callspace.forSpace;
+    }
+    return callspace.exprSpace;
+  }
+  else return null;
+}
 
 ex.regist('setVar', function(sName,value) {
   if (!sName || typeof sName != 'string') return value;  // fatal error
   
-  var comp = this.component, wdgt = comp.widget, space = null;
-  if (wdgt) {
-    var callspace = wdgt.$callspace;
-    if (callspace)
-      space = callspace.exprSpace;
-    else {
-      var b = comp.$gui.triggerInfo; // for trigger='...'
-      if (Array.isArray(b))
-        space = b[0];
-    }
-  }
-  
+  var comp = this.component, space = getCurrExprSpace_(this,comp);
   if (!space)
     console.log('warning: invalid callspace for ex.setVar(' + sName + ')');
   else space[sName] = value;
-  
   return value;
 });
 
@@ -654,6 +856,78 @@ ex.regist('log', function() {  // return [comp,sKey,iTimeId] or undefined
     sOut += ' ' + arguments[i];
   }
   console.log(sOut);
+});
+
+ex.regist('map', function(data,sExpr) {
+  if (!Array.isArray(data)) return [];    // fatal error
+  var itemLen = data.length;
+  if (!itemLen) return [];
+  if (!sExpr || typeof sExpr != 'string') return data.slice(0);
+  
+  var bAst = setupExprAst(sExpr,null,'map');
+  if (!bAst) return [];
+  if (bAst[0] == 61) bAst = bAst[1][2]; // ignore headId // expr_items_1 : expr : expr
+  
+  var comp = this.component, space = getCurrExprSpace_(this,comp);  // comp can undefined
+  if (space)
+    adjustExprAst(bAst,[]);
+  else space = {};
+  
+  var bRet = [];
+  space.$count = itemLen;
+  for (var ii=0; ii < itemLen; ii++) {
+    space.$item = data[ii];
+    space.$index = ii;
+    try {
+      bRet.push(evalInSpace(bAst,space));
+    }
+    catch(e) {  // ignore this item 
+      console.log('error: run map() failed ($index=' + ii + ')');
+      console.log(e);
+    }
+  }
+  delete space.$item;
+  delete space.$index;
+  delete space.$count;
+  
+  return bRet;
+});
+
+ex.regist('filter', function(data,sExpr) {
+  if (!Array.isArray(data)) return [];    // fatal error
+  var itemLen = data.length;
+  if (!itemLen) return [];
+  if (!sExpr || typeof sExpr != 'string')
+    sExpr = '$item !== null';
+  
+  var bAst = setupExprAst(sExpr,null,'filter');
+  if (!bAst) return [];
+  if (bAst[0] == 61) bAst = bAst[1][2]; // ignore headId // expr_items_1 : expr : expr
+  
+  var comp = this.component, space = getCurrExprSpace_(this,comp);
+  if (space)
+    adjustExprAst(bAst,[]);
+  else space = {};
+  
+  var bRet = [];
+  space.$count = itemLen;
+  for (var ii=0; ii < itemLen; ii++) {
+    var oneItem  = space.$item = data[ii];
+    space.$index = ii;
+    try {
+      if (evalInSpace(bAst,space))
+        bRet.push(oneItem);
+    }
+    catch(e) {  // ignore this item 
+      console.log('error: run filter() failed ($index=' + ii + ')');
+      console.log(e);
+    }
+  }
+  delete space.$item;
+  delete space.$index;
+  delete space.$count;
+  
+  return bRet;
 });
 
 ex.regist('order', function(data) {  // ex.order(items,"attr",-1) or ex.order(items,["attr",-1])
@@ -1327,12 +1601,24 @@ function evalInSpace(bAst,rootSpace) {
         throw new Error('syntax error at offset (' + bAst[2] + '): invalid attribute name');
       
       var owner = evalInSpace(exprL,rootSpace), sAttr = exprR[1][0][1];
-      return owner[sAttr];
+      try {
+        return owner[sAttr];
+      }
+      catch(e) {
+        console.log('error: get attribute (' + sAttr + ') failed');
+        return undefined;
+      }
     }
     else if (sOp == '[') {
       var owner = evalInSpace(exprL,rootSpace);
       var sAttr = evalInSpace(exprR,rootSpace);
-      return owner[sAttr];
+      try {
+        return owner[sAttr];
+      }
+      catch(e) {
+        console.log('error: get attribute ([' + sAttr + ']) failed');
+        return undefined;
+      }
     }
     else if (sOp == '(') {
       if (exprL[0] == 32 && exprL[1][0][1] == 'while') {
@@ -1360,21 +1646,21 @@ function evalInSpace(bAst,rootSpace) {
           
           var thisObj = evalInSpace(b2[0],rootSpace);
           var subAttr = attrExpr[1][0][1];
-          return thisObj[subAttr].apply(thisObj,bArgs);
+          return thisObj[subAttr].apply(thisObj,bArgs); // if not function, will raise error // support pseudo: {apply:fn}
         }
       }
       
       var fn = evalInSpace(exprL,rootSpace);
-      return fn.apply(null,bArgs);
+      return fn.apply(null,bArgs); // if not function, will raise error // support pseudo: {apply:fn}
     }
     else if (sOp == '&&') {
       var valueL = evalInSpace(exprL,rootSpace);
-      if (!valueL) return valueL; // shortcut
+      if (!valueL) return valueL;  // shortcut
       return evalInSpace(exprR,rootSpace);
     }
     else if (sOp == '||') {
       var valueL = evalInSpace(exprL,rootSpace);
-      if (valueL) return valueL;  // shortcut
+      if (valueL) return valueL;   // shortcut
       return evalInSpace(exprR,rootSpace);
     }
     else {
@@ -1517,7 +1803,7 @@ function setupExprAst(sExpr,comp,sKey) {
     succ = true;
   }
   catch(e) {
-    utils.instantShow('error: lexical analysis failed at ' + comp.widget.getPath() + ':' + sKey);
+    utils.instantShow('error: lexical analysis failed at ' + (comp?comp.widget.getPath():'') + ':' + sKey);
     console.log(e);
   }
   if (!succ) return null;
@@ -1526,7 +1812,7 @@ function setupExprAst(sExpr,comp,sKey) {
     ret = processYacc(exprToken_,true); // maybe raise exception
   }
   catch(e) {
-    utils.instantShow('error: yacc analysis failed at ' + comp.widget.getPath() + ':' + sKey);
+    utils.instantShow('error: yacc analysis failed at ' + (comp?comp.widget.getPath():'') + ':' + sKey);
     console.log(e);
   }
   return ret;
@@ -1535,9 +1821,9 @@ function setupExprAst(sExpr,comp,sKey) {
 // find target component and locate which callspace, pathFlag: -N or sPath
 function findComponent_(comp,pathFlag,bInfo,parentIdx) {
   var wdgt = comp.widget;
+  var parentNum = parentIdx || 0; // if parentNum > 0 means access from sub level
   if (typeof pathFlag == 'number') {
     var iLastIdx = undefined;
-    var parentNum = parentIdx || 0; // if parentNum > 0 means access from sub level
     while (wdgt) {
       var comp_ = wdgt.component, idx = comp_ && comp_.props['for.index'];
       
@@ -1604,10 +1890,14 @@ function findComponent_(comp,pathFlag,bInfo,parentIdx) {
     return null;
   }
   else { // pathFlag must be string, no need find props['for.index']
-    while (wdgt) {
-      if (wdgt.$callspace && wdgt.$callspace.hasOwnProperty('flowFlag')) // has callspace
-        return getCompByPath_(wdgt.component,pathFlag); // according to nearest callspace
+    while (wdgt) { // if parentNum == 0 means find from current node
+      if (wdgt.$callspace && wdgt.$callspace.hasOwnProperty('flowFlag')) { // has callspace
+        if (parentNum > 0 || wdgt.$callspace.forSpace)    // find from sub node, or from current node and current has two spaces ($$for)
+          return getCompByPath_(wdgt.component,pathFlag); // according to nearest callspace
+      }
+      
       wdgt = wdgt.parent;
+      parentNum += 1;
     }
     return null;
   }
@@ -1737,7 +2027,7 @@ function anyPrevIfTrue2(comp) {
 
 var reservedCallable_ = ['props','state','duals','item','count','index'];
 
-function adjustExprAst(bAst,bDepend) {
+function adjustExprAst(bAst,bDepend,isRight) { // isRight=true means 'expr.' or 'expr[' prefixed
 //  A) adjust i)item.attr --> item().attr  ii)item[sAttr] --> item()[s]  iii)item --> item()
 //     includes: props duals item count index
 //  B) get all depends of: duals(path).attr
@@ -1764,7 +2054,7 @@ function adjustExprAst(bAst,bDepend) {
   }
   else if (tp >= 31) {
     if (tp == 32) {
-      if (dualFlag = isCallableId(bAst)) {  // ID --> ID(), such as: props duals count item index
+      if (!isRight && (dualFlag=isCallableId(bAst))) {  // ID --> ID(), such as: props duals count item index
         var iLn = bAst[2], idExpr = bAst.slice(0);
         bAst[0] = 34; bAst[1] = [idExpr,[14,'(',iLn,17], null];
         return bDepend.push([dualFlag,0]);
@@ -1774,7 +2064,7 @@ function adjustExprAst(bAst,bDepend) {
     else if (tp == 34) {  // expr OP expr     expr OP null     expr OP expr_list
       var exprL = b[0], op = b[1], exprR = b[2], opName = op[1];
       if (opName == '.') {
-        if (dualFlag = isCallableId(exprL)) {   // ID --> ID(), such as: props duals count item index
+        if (!isRight && (dualFlag=isCallableId(exprL))) {   // ID --> ID(), such as: props duals count item index
           if (exprR[0] == 32) {
             var sId = exprR[1][0][1];  // exprR[1][0] is ID token
             bDepend.push([dualFlag,0,sId]);
@@ -1783,23 +2073,52 @@ function adjustExprAst(bAst,bDepend) {
             var iLn = exprL[2], idExpr = exprL.slice(0);
             exprL[0] = 34; exprL[1] = [idExpr,[14,'(',iLn,17], null];
           }
-          else adjustExprAst(exprR,bDepend);
+          else adjustExprAst(exprR,bDepend,true);
         }
         else {
-          if (adjustExprAst(exprL,bDepend)) {      // duals()/duals(xx)  or  props()/props(xx)
-            
+          if (adjustExprAst(exprL,bDepend,isRight)) {   // duals()/duals(xx)  or  props()/props(xx)
             if (exprR[0] == 32) {
               var sId = exprR[1][0][1], bLast = bDepend[bDepend.length-1];
-              bLast.push(sId);           // duals(xx).sId   or   props(xx).sId
+              bLast.push(sId);                  // duals(xx).sId   or   props(xx).sId
               return 0;
             }
           }
-          adjustExprAst(exprR,bDepend);
+          adjustExprAst(exprR,bDepend,true);
+        }
+      }
+      else if (opName == '[') {
+        if (!isRight && (dualFlag=isCallableId(exprL))) {    // ID[sAttr]
+          if (exprR[0] == 33) {
+            var sStr = exprR[1][0][1];  // exprR[1][0] is string token
+            bDepend.push([dualFlag,0,sStr.slice(1,-1)]);
+            
+            // props/duals[sAttr]  -->  props/duals() [ sAttr
+            var iLn = exprL[2], idExpr = exprL.slice(0);
+            exprL[0] = 34; exprL[1] = [idExpr,[14,'(',iLn,17], null];
+          }
+          else if (dualFlag == 4 && exprR[0] == 31) { // item[N]  --> item()[N]
+            bDepend.push([dualFlag,0]);
+            
+            var iLn = exprL[2], idExpr = exprL.slice(0);
+            exprL[0] = 34;
+            exprL[1] = [idExpr, [14, '(', iLn, 17], null];
+          }
+          else adjustExprAst(exprR,bDepend);    // isRight=false
+        }
+        else {
+          if (adjustExprAst(exprL,bDepend,isRight)) { // duals()/duals(xx)  or  props()/props(xx)
+            if (exprR[0] == 33) {
+              var sStr = exprR[1][0][1], bLast = bDepend[bDepend.length-1];
+              bLast.push(sStr.slice(1,-1));     // props/duals(xx)[sStr]
+              return 0;
+            }
+          }
+          adjustExprAst(exprR,bDepend);         // isRight=false
         }
       }
       else if (opName == '(') {
         dualFlag = isCallableId(exprL);
-        if (dualFlag) {  // ID ( expr_list
+        if (dualFlag) {       // ID ( expr_list // no check isRight, op-level of '(' is lower than . [ 
           if (exprR === null) // props/duals()
             return bDepend.push([dualFlag,0]);
         
@@ -1816,45 +2135,22 @@ function adjustExprAst(bAst,bDepend) {
             }
           }
           
-          adjustExprAst(exprR,bDepend);
+          adjustExprAst(exprR,bDepend);     // isRight=false
         }
         else {
-          adjustExprAst(exprL,bDepend);
+          adjustExprAst(exprL,bDepend);     // isRight=false, op-level is lower than . [
           if (exprR !== null)
-            adjustExprAst(exprR,bDepend);
-        }
-      }
-      else if (opName == '[') {
-        if (dualFlag = isCallableId(exprL)) {         // ID[sAttr]
-          if (exprR[0] == 33) {
-            var sStr = exprR[1][0][1];  // exprR[1][0] is string token
-            bDepend.push([dualFlag,0,sStr.slice(1,-1)]);
-            
-            // props/duals[sAttr]  -->  props/duals() [ sAttr
-            var iLn = exprL[2], idExpr = exprL.slice(0);
-            exprL[0] = 34; exprL[1] = [idExpr,[14,'(',iLn,17], null];
-          }
-          else adjustExprAst(exprR,bDepend);
-        }
-        else {
-          if (adjustExprAst(exprL,bDepend)) {     // duals()/duals(xx)  or  props()/props(xx)
-            if (exprR[0] == 33) {
-              var sStr = exprR[1][0][1], bLast = bDepend[bDepend.length-1];
-              bLast.push(sStr.slice(1,-1));  // props/duals(xx)[sStr]
-              return 0;
-            }
-          }
-          adjustExprAst(exprR,bDepend);
+            adjustExprAst(exprR,bDepend);   // isRight=false
         }
       }
       else if (opName == 'in') {
         if (exprL[0] != 32)  // 32 is expr_2: ID  // no change, avoid change item --> item()
-          adjustExprAst(exprL,bDepend);
-        adjustExprAst(exprR,bDepend);
+          adjustExprAst(exprL,bDepend);  // isRight=false, op-level is lower than . [
+        adjustExprAst(exprR,bDepend);    // isRight=false
       }
-      else {
-        adjustExprAst(exprL,bDepend);
-        adjustExprAst(exprR,bDepend);
+      else { // opName such as: + - * / &&
+        adjustExprAst(exprL,bDepend);    // isRight=false, op-level is lower than . [
+        adjustExprAst(exprR,bDepend);    // isRight=false
       }
     }
     else if (tp == 35) {  // expr? expr: expr
@@ -1887,9 +2183,9 @@ function adjustExprAst(bAst,bDepend) {
   }
 }
 
-function getKeyidExprAst_(comp,sExpr) {
+function getKeyChildExprAst_(comp,sExpr,attrName) { // attrName: 'key' or 'children'
   // step 1: setup AST
-  var bAst = setupExprAst(sExpr,comp,'key');
+  var bAst = setupExprAst(sExpr,comp,attrName);
   if (bAst) {
     if (bAst[0] == 61) bAst = bAst[1][2];  // expr_items_1 : expr : expr  // ignore 'all:' or 'strict:' head
     adjustExprAst(bAst,[]);
@@ -1906,7 +2202,7 @@ function getKeyidExprAst_(comp,sExpr) {
         else return oldIndex(N,1);
       };
       
-      space.$info = [comp,'key',ex.time()];
+      space.$info = [comp,attrName,ex.time()];
       try {
         return evalInSpace(bAst,space);
       }
@@ -1931,7 +2227,7 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
   if (bAst) {
     if (bAst[0] == 61) {    // expr_items_1 : expr : expr
       headId = bAst[1][0];
-      bAst = bAst[1][2]
+      bAst = bAst[1][2];
       
       if (headId[0] == 32)  // expr_2 : ID
         headId = headId[1][0][1];
@@ -1947,6 +2243,17 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
     
     var bDepend = [];
     adjustExprAst(bAst,bDepend);
+    
+    if (sKey == 'trigger') {
+      var sFireType = comp.props.fireType || 'auto';
+      if (sFireType === 'onsite') {   // gui.syncTrigger > 1
+        bDepend = [];                 // temporary eval $trigger, no listen
+        comp.$gui.syncTrigger = 3;    // 2 for temporary no recall fireTrigger_()
+      }
+      else if (sFireType === 'none')
+        comp.$gui.syncTrigger = 0;
+      else comp.$gui.syncTrigger = 1; // 'auto', no reverse eval $trigger, auto fire action
+    }
     
     // step 3: setup dDepend = {sPath:[comp,attr1,attr2,...]}  bDepend2 = [-2,-1,...]
     var dDepend = {}, bDepend2 = [];
@@ -2135,18 +2442,24 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
             if (Array.isArray(bForData)) {
               if (filterExpr) {
                 var bb = [], itemLen = bForData.length;
-                for (var ii=0; ii < itemLen; ii++) {
-                  var oneItem = space.$item = bForData[ii];
-                  try {
-                    if (evalInSpace(filterExpr,space))
-                      bb.push(oneItem);
+                if (itemLen) {  // has length
+                  space.$count = itemLen;
+                  for (var ii=0; ii < itemLen; ii++) {
+                    var oneItem  = space.$item  = bForData[ii];
+                    space.$index = ii;
+                    try {
+                      if (evalInSpace(filterExpr,space))
+                        bb.push(oneItem);
+                    }
+                    catch(e) {  // ignore this item 
+                      console.log('error: run filter failed ($index=' + ii + ' in ' + comp.widget.getPath() + ')');
+                      console.log(e);
+                    }
                   }
-                  catch(e) {  // ignore this item 
-                    console.log('error: run filter failed (' + comp.widget.getPath() + ')');
-                    console.log(e);
-                  }
+                  delete space.$index;
+                  delete space.$item;
+                  delete space.$count;
                 }
-                delete space.$item;
                 bForData = bb;
               }
               if (orderList)
@@ -2185,7 +2498,7 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
               }
               if (newValue && oldValue !== newValue && comp.props['hasStatic.']) {
                 setTimeout( function() {
-                  renewStaticChild(comp);
+                  renewStaticChild(comp,true);
                 },0);
               }
             }
@@ -2211,7 +2524,7 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
               var newValue = comp.state['if'] = evalInSpace(bAst,space);
               if (newValue && oldValue !== newValue && comp.props['hasStatic.']) {
                 setTimeout( function() {
-                  renewStaticChild(comp);
+                  renewStaticChild(comp,true);
                 },0);
               }
             }
@@ -2222,10 +2535,29 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
           // else, unknown error, ignore
         }
         else {
-          if (isExprSetter)
-            comp.duals[sKey] = evalInSpace(bAst,space);
+          if (isExprSetter) {
+            var oldSync = comp.$gui.syncTrigger;
+            if (oldSync) {       // sKey must be 'trigger'
+              var oldTrigger = comp.state.trigger;
+              if (oldSync <= 2)  // 'auto' or ('onsite' and called from fireTrigger_())
+                comp.duals[sKey] = evalInSpace(bAst,space);
+              
+              var noFire = false;
+              if (oldSync !== 1) {
+                if (oldSync === 2) {  // called from fireTrigger_()
+                  noFire = true;
+                  comp.$gui.syncTrigger = 3;
+                }
+                else comp.$gui.syncTrigger = identicalId_;  // means no need re-eval $trigger
+              } // else, oldSync == 1, should fire
+              
+              if (!noFire)
+                fireTrigger_(oldTrigger,comp); // not force trigger, only when state.trigger changed
+            }
+            else comp.duals[sKey] = evalInSpace(bAst,space);
+          }
           else comp.state[sKey] = evalInSpace(bAst,space);
-          if (isHtmlTxt) comp.state['html.'] = comp.state[sKey];
+          if (isHtmlTxt) comp.duals['html.'] = comp.state[sKey];
         }
       }
       finally {
@@ -2295,7 +2627,7 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
                 var dState = {}; dState[sFlag] = newValue;
                 obj.setState(dState, function() {
                   if (newValue && obj.props['hasStatic.']) {
-                    renewStaticChild(obj);
+                    renewStaticChild(obj,true);
                   }
                 });
               },0);  // fire render in next tick
@@ -2364,7 +2696,7 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
                 obj.state['elif'] = !newValue;
                 obj.setState({'elif':newValue}, function() {
                   if (newValue && obj.props['hasStatic.']) {
-                    renewStaticChild(obj);
+                    renewStaticChild(obj,true);
                   }
                 });
               },0);  // fire render in next tick
@@ -2381,7 +2713,7 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
               obj.state['else'] = false;
               obj.setState({'else':true}, function() {
                 if (obj.props['hasStatic.']) {
-                  renewStaticChild(obj);
+                  renewStaticChild(obj,true);
                 }
               });
             },0); // fire render in next tick
@@ -2541,7 +2873,7 @@ function dualFuncOfGetSet_(comp,attr,superSet,setFn) {
 
 function syncProps_(comp) {
   var ret = false, firstRender = false;
-  var exprDict, bConns, gui = comp.$gui, duals = comp.duals;
+  var exprDict, gui = comp.$gui, duals = comp.duals;
   
   gui.inSync = true;
   
@@ -2623,7 +2955,7 @@ function syncProps_(comp) {
           }
           if (isDual) exprAttrs2.push(sKey); // dual-aa-bb --> aaBb
           
-          if (sKey != 'data') {        // not :data or :dual-data
+          if (sKey != 'data') {        // not ($data or $dual-data)
             var iFlag_ = supportedAttr_[sKey];
             if (iFlag_ && iFlag_ != 5 && !bothPropExpr)
               gui.tagAttrs.push(sKey);
@@ -2698,7 +3030,7 @@ function syncProps_(comp) {
               });
             }
             else { // dual-setter has defined, just reuse oldDesc
-              if (i == 0) exprDualSetter[sKey] = true; // result of :expr assign to duals.expr, not state.expr
+              if (i == 0) exprDualSetter[sKey] = true; // result of $expr assign to duals.expr, not state.expr
             }
           });
         }
@@ -2739,24 +3071,36 @@ function syncProps_(comp) {
         if (gui.forExpr) {
           var comps_ = gui.comps2 = gui.comps; // backup for dynamic setup
           var exprKeys_ = gui.exprKeys = [];
+          var exprChild_ = gui.exprChild = [];
           for (var i=comps_.length-1; i >= 0; i -= 1) {
             var child = comps_[i];
             if (child) {
               if (hasClass_(child.props.className,'rewgt-static')) {
                 exprKeys_.unshift(null);
+                exprChild_.unshift(null);
                 continue;
               }
               
-              var sKeyExpr = child.props['$key'];
+              var sKeyExpr = child.props['$key'], fn = null;
               if (sKeyExpr && typeof sKeyExpr == 'string') {
-                var fn = getKeyidExprAst_(comp,sKeyExpr);
-                if (fn) {
-                  exprKeys_.unshift(fn);
-                  continue;
-                }
-                console.log("error: invalid '$key' expression: " + sKeyExpr);
+                fn = getKeyChildExprAst_(comp,sKeyExpr,'key');
+                if (!fn)
+                  console.log("error: invalid '$key' expression: " + sKeyExpr);
               }
               else console.log("error: no '$key' defined for child element in '$for' loop.");
+              if (fn) {
+                exprKeys_.unshift(fn);
+                
+                var sChildExpr = child.props['$children'], fn2 = null;
+                if (sChildExpr && typeof sChildExpr == 'string') {
+                  fn2 = getKeyChildExprAst_(comp,sChildExpr,'children');
+                  if (!fn2)
+                    console.log("error: invalid '$children' expression: " + sChildExpr);
+                }
+                exprChild_.unshift(fn2);
+                
+                continue;  // avoid call comps_.splice(i,1);
+              }
             }
             comps_.splice(i,1);
           }
@@ -2777,9 +3121,9 @@ function syncProps_(comp) {
             console.log('warning: compile expression ($' + sKey + ') failed.');
           else {
             if (headId != 'any') {
-              setTimeout( function() {
-                exprDict[sKey] = fn;
-              },0);  // set in next tick to avoid calling in first render
+              var delayExpr = gui.syncExpr;
+              if (!delayExpr) delayExpr = gui.syncExpr = [];
+              gui.syncExpr.push([sKey,fn]); // regist in didMount, avoid calling in first render
             }
             else exprDict[sKey] = fn;  // add to $gui.exprAttrs, includes: $for $if $elif
             
@@ -2805,6 +3149,8 @@ function syncProps_(comp) {
       }
     }
     else {  // not first render
+      exprDict = gui.exprAttrs;
+      
       var duaItem;
       while (duaItem = duals2.shift()) {
         duals[duaItem[0]] = duaItem[1]; // do this.duals.xxx = value before props re-assign
@@ -2813,7 +3159,7 @@ function syncProps_(comp) {
         // comp.props[expr] must be 'undefined' for :expr, so that must be driven from props[:expr]
         var item = comp.props[sKey];    // can not pass props.id__
         if (item === undefined) {
-          var sKey_ = gui.dualAttrs[sKey];
+          var sKey_ = gui.dualAttrs[sKey]; // attr --> dual-attr
           if (sKey_) {
             item = comp.props[sKey_];   // try get props['dual-*']
             if (item === undefined) return;
@@ -2829,19 +3175,18 @@ function syncProps_(comp) {
       });
     }
     
-    var exprAttrs2 = comp.state.exprAttrs;
-    exprDict = gui.exprAttrs; bConns = [];
+    var exprAttrs2 = comp.state.exprAttrs, bConns = [];
     if (exprAttrs2.length) {
       var item, iPos = exprAttrs2.indexOf('data');
       if (iPos >= 0) {
         item = exprAttrs2[iPos];
         exprAttrs2.splice(iPos,1);
-        assignOneDual(item);
+        assignOneDual(bConns,item);
         exprAttrs2 = comp.state.exprAttrs; // 'duals.data = xx' maybe change state.exprAttrs
       }
       
       while (item = exprAttrs2.shift()) {
-        assignOneDual(item);
+        assignOneDual(bConns,item);
       }
     }
     
@@ -2871,7 +3216,8 @@ function syncProps_(comp) {
         gui.forExpr['data-for.path'] = ctrlValue;
         
         // setup gui.comps and gui.compIdx
-        var newCompIdx = {}, newComps = [], comps_ = gui.comps2, exprKeys_ = gui.exprKeys;
+        var newCompIdx = {}, newComps = [], comps_ = gui.comps2;
+        var exprKeys_ = gui.exprKeys, exprChild_ = gui.exprChild;
         var currNode, hasStatic = false, childInline = comp.props['childInline.'];
         ctrlValue.forEach( function(item,idx) {
           for (var i=0,child; child=comps_[i]; i+=1) {
@@ -2895,31 +3241,51 @@ function syncProps_(comp) {
               }
               if (child.props['isReference.']) continue; // not support RefXXX under $for
               
+              var fn2 = exprChild_[i], forChild = null;
+              if (fn2) {
+                try {
+                  forChild = fn2(comp,idx);
+                  if (!forChild)
+                    forChild = null;
+                  else if (!React.isValidElement(forChild) && !Array.isArray(forChild) && typeof forChild != 'string')
+                    forChild = null;
+                }
+                catch(e) { // failed, forChild must be null
+                  console.log("error: caculate '$children' (" + (i+1) + ' of ' + comps_.length + ') failed.');
+                  console.log(e);
+                }
+              }
+              
+              var keyid, succ = false;
               try {
-                var keyid = fn(comp,idx);
+                keyid = fn(comp,idx);
                 if (typeof keyid != 'number') keyid = keyid + '';
-                newCompIdx[keyid] = newComps.push(React.cloneElement(child,{'hookTo.':ownerWdgt,'keyid.':keyid,key:keyid+'','for.index':idx})) - 1;
+                succ = true;
               }
               catch(e) {
                 console.log("error: caculate '$key' (" + (i+1) + ' of ' + comps_.length + ') failed.');
                 console.log(e);
               }
+              
+              if (succ) {
+                var childProp = {'hookTo.':ownerWdgt,'keyid.':keyid,key:keyid+'','for.index':idx};
+                var childEle = forChild? React.cloneElement(child,childProp,forChild): React.cloneElement(child,childProp);
+                newCompIdx[keyid] = newComps.push(childEle) - 1;
+              }
+              // else, just ignore
             }
           }
         });
         
         if (hasStatic) {
           setTimeout( function() {
-            renewStaticChild(comp);
+            renewStaticChild(comp,true);
           },0);  // renew static node after didMount
         }
         
-        var allOldKey = Object.keys(gui.compIdx);
+        if (gui.comps.length != 0 || newComps.length != 0)
+          gui.removeNum += 1;  // will fire duals.childNumId
         gui.compIdx = newCompIdx; gui.comps = newComps;
-        allOldKey.forEach( function(sKey) {
-          if (!newCompIdx.hasOwnProperty(sKey))
-            gui.removeNum += 1;  // will fire duals.childNumId
-        });
       }
     }
     
@@ -2950,6 +3316,11 @@ function syncProps_(comp) {
     }
     gui.id2__ = 0; // id2__ != 0 means in id__ changing
     
+    if (gui.isChildExpr && gui.children2 !== comp.props.children) {
+      gui.removeNum += gui.comps.length;    // wait to rescan in duals.childNumId
+      gui.children2 = comp.props.children;
+      gui.comps = React.Children.toArray(comp.props.children);
+    }
     duals.childNumId = gui.comps.length + (gui.removeNum << 16);
   }
   catch(e) {
@@ -2959,7 +3330,7 @@ function syncProps_(comp) {
   gui.inSync = false;
   return ret; // if return true means comp.state.xxx is changed
   
-  function assignOneDual(item) {
+  function assignOneDual(bConns,item) {
     var fn = exprDict[item];
     if (!fn) return;
     try {
@@ -3128,7 +3499,8 @@ function getCompRenewProp_(oneObj) {
   if (!template) return null;
   
   var bStated = template._statedProp || [];
-  var bSlient = template._slientProp || [];
+  var bSilent = template._silentProp || [];
+  var hasHtmlTxt = template._htmlText;
   var props = Object.assign({},oneObj.props);
   
   oneObj.$gui.dataset.forEach( function(item) {
@@ -3141,9 +3513,17 @@ function getCompRenewProp_(oneObj) {
     if (value !== undefined)
       props[item] = value;
   });
-  bSlient.forEach( function(item) {
+  bSilent.forEach( function(item) {
     delete props[item];
   });
+  
+  if (hasHtmlTxt) {
+    var sHtml = oneObj.state['html.'];
+    if (!sHtml || typeof sHtml != 'string')
+      delete props['html.'];
+    else props['html.'] = sHtml;
+  }
+  else delete props['html.'];
   
   delete props['data-unit.path'];
   delete props['data-span.path'];
@@ -3156,12 +3536,13 @@ creator.getCompRenewProp = getCompRenewProp_;
 function deepCloneReactEle_(srcEle,dProp,compWdgt,compObj) { // compObj must not a linker
   // return React.cloneElement(srcEle,dProp);  // can not directly clone
   
-  var bComp = compObj.$gui.comps, bArgs = [];
+  var gui = compObj.$gui, hasFor = !!gui.forExpr;
+  var bComp = hasFor?gui.comps2:gui.comps, bArgs = [];
   var childInline = compObj.props['childInline.'];
   
   bComp.forEach( function(child) {
     if (!child) return;
-    if (child.props['isReference.']) {  // add unlinked-linker
+    if (hasFor || child.props['isReference.']) {  // add unlinked-linker
       bArgs.push(child);
       return;
     }
@@ -3180,7 +3561,7 @@ function deepCloneReactEle_(srcEle,dProp,compWdgt,compObj) { // compObj must not
         
         if (Array.isArray(bList)) {
           var bNew = bList.map( function(item) { return item.cloneNode(true); } );
-          idx = W.$staticNodes.push(bNew) - 1;
+          idx = W.$staticNodes.push(bNew) - 1;  // take gui.removeNum == 0
           props.name = idx + '';
         }
       }
@@ -3253,169 +3634,195 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
   
   var compObj = wdgt.component, isTopmost = wdgt === topmostWidget_;
   sPath += '.' + (compObj? compObj.$gui.keyid: 'undefined');
+  if (!compObj) {
+    console.log('warning: widget (' + sPath + ') is null.');
+    return;
+  }
   
-  if (compObj) {
-    // step 1: find className, props
-    var dProp = {}, iFlag = 0; // 0:panel, 1:unit(div), 2:paragraph, 3:span
-    var sClsName, objState = compObj.state, sLink = objState['data-unit.path'];
+  // step 1: find className, props
+  var dProp = {}, iFlag = 0; // 0:panel, 1:unit(div), 2:paragraph, 3:span
+  var objState = compObj.state, objGui = compObj.$gui;
+  var sClsName, sLink = objState['data-unit.path'];
+  if (sLink !== undefined) {
+    sClsName = 'RefDiv';
+    iFlag = 2;
+  }
+  else {
+    sLink = objState['data-span.path'];
     if (sLink !== undefined) {
-      sClsName = 'RefDiv';
-      iFlag = 2;
+      sClsName = 'RefSpan';
+      iFlag = 3;
     }
-    else {
-      sLink = objState['data-span.path'];
-      if (sLink !== undefined) {
-        sClsName = 'RefSpan';
-        iFlag = 3;
-      }
-    }
-    
-    if (sLink !== undefined) {  // is linker
-      var oldProp = sLink? compObj.props['link.props']: null;
-      if (oldProp) { // has linked
-        Object.assign(dProp,oldProp);
-        
-        var sKey = dProp['keyid.'];
-        delete dProp['keyid.'];
-        delete dProp.key;
-        if (typeof sKey == 'string') {
-          if (sKey[0] == '$') {
-            sKey = sKey.slice(1);
-            if (sKey !== (parseInt(sKey)+''))
-              dProp.key = sKey;
-            // else, is number, dProp.key removed
-          }
-          else dProp.key = sKey; // save 'key', not 'keyid.'
-        }
-        // else, not string, dProp.key removed
-        
-        Object.keys(dProp).forEach( function(item) {
-          if (dProp[item] === undefined)
-            delete dProp[item];            // remove all 'undefined' value
-        });
-        
-        dProp['$'] = sLink;
-        bRet.push([sClsName,dProp,iFlag]);
-      }
-      // else, system error, unknown format
-    }
-    else if (compObj.props['isReference.'])
-      ;   // ignore unlinked RefDiv/RefSpan
-    else {
-      var keyid = compObj.$gui.keyid;
-      var sKey = (typeof keyid == 'string')? keyid: '';  // if keyid is number, sKey = ''
-      var shadowTemp = getWidgetTempInfo(compObj._);
-      var bStated = shadowTemp[1], bSlient = shadowTemp[2], dDefault = shadowTemp[3], bDefault = Object.keys(dDefault);
-      sClsName = shadowTemp[0];
+  }
+  
+  if (sLink !== undefined) {  // is linker
+    var oldProp = sLink? compObj.props['link.props']: null;
+    if (oldProp) { // has linked
+      Object.assign(dProp,oldProp);
       
-      if (compObj.props['childInline.']) {
-        if (hasClass_(compObj.props.className,'rewgt-unit'))
-          iFlag = 2;
-        else iFlag = 3;
-      }
-      else {
-        if (hasClass_(compObj.props.className,'rewgt-unit'))
-          iFlag = 1;
-        // else iFlag = 0;
-      }
+      if (!compObj._._htmlText)
+        delete dProp['html.'];
       
-      Object.assign(dProp,compObj.props);
-      compObj.$gui.dataset.forEach( function(item) { // take data-* aria-* as stated props
-        var value = objState[item];
-        if (value !== undefined)
-          dProp[item] = value;
-      });
-      bStated.forEach( function(item) {
-        var value = objState[item];
-        if (value !== undefined)
-          dProp[item] = value;
-      });
-      bSlient.forEach( function(item) {
-        delete dProp[item];
-      });
-      bDefault.forEach( function(sAttr) {
-        var value = dDefault[sAttr];
-        if (value === undefined) {       // 'undefined' match any of none-number
-          if (typeof dProp[sAttr] != 'number')
-            delete dProp[sAttr];
-        }
-        else if (quickCheckEqual_(value,dProp[sAttr]))
-          delete dProp[sAttr];
-      });
-      
-      delete dProp.children;
-      delete dProp['hasStatic.'];        // can restore by analyse
-      Object.keys(dProp).forEach( function(item) {
-        var value = dProp[item];
-        if (value === undefined)
-          delete dProp[item];            // remove all 'undefined' value
-        else if (typeof value == 'function') {
-          delete dProp[item];
-          if (!isUnderLinker(compObj.widget))
-            console.log('warning: can not dump function property (' + item + ')');
-        }
-      });
+      var sKey = dProp['keyid.'];
+      delete dProp['keyid.'];
       delete dProp.key;
-      if (sKey) dProp.key = sKey;
-      if (isTopmost) {
-        delete dProp.left;
-        delete dProp.top;
+      if (typeof sKey == 'string') {
+        if (sKey[0] == '$') {
+          sKey = sKey.slice(1);
+          if (sKey !== (parseInt(sKey)+''))
+            dProp.key = sKey;
+          // else, is number, dProp.key removed
+        }
+        else dProp.key = sKey; // save 'key', not 'keyid.'
       }
+      // else, not string, dProp.key removed
+      
+      Object.keys(dProp).forEach( function(item) {  // includes 'isPre.'
+        if (dProp[item] === undefined)
+          delete dProp[item];  // remove all 'undefined' value
+      });
+      
       if (dProp.style && Object.keys(dProp.style).length == 0)
         delete dProp.style;
       
-      // step 2: scan children
-      var bSubRet = [];
-      if (!compObj.props['noSaveChild.'] && sLink === undefined) {
-        var bComp = compObj.$gui.comps, compNode = null;
-        bComp.forEach( function(child) {
-          if (!child) return;
-          var sKey = getElementKey_(child);
-          if (!sKey) return;
-          
-          if (isTopmost && sKey[0] == '$') {
-            if (sKey == '$pop') return; // ignore popup window widget
-            if (sKey[1] == '$' && child.props['isTemplate.']) return; // ignore .body.$$template
-          }
-          
-          var child_ = wdgt[sKey];
-          if (child_)
-            dumpReactTree_(bSubRet,child_,sPath);
-          else {
-            if (hasClass_(child.props.className,'rewgt-static')) {
-              if (!compNode)
-                compNode = ReactDOM.findDOMNode(compObj);
-              var sName = child.props.name, bHtml = [];
-              if (compNode && sName) {
-                var node = compNode.querySelector('.rewgt-static[name="' + sName + '"]');
-                if (node) {
-                  for (var i=0,subItem; subItem = node.children[i]; i+=1) {
-                    bHtml.push(subItem.outerHTML);
-                  }
+      dProp['$'] = sLink;
+      bRet.push([sClsName,dProp,iFlag]);
+    }
+    // else, system error, unknown format
+  }
+  else if (compObj.props['isReference.'])
+    ;   // ignore unlinked RefDiv/RefSpan
+  else {
+    var keyid = objGui.keyid;
+    var sKey = (typeof keyid == 'string')? keyid: '';  // if keyid is number, sKey = ''
+    var shadowTemp = getWidgetTempInfo(compObj._);
+    var bStated = shadowTemp[1], bSilent = shadowTemp[2], dDefault = shadowTemp[3];
+    var hasHtmlTxt = shadowTemp[4], bDefault = Object.keys(dDefault);
+    sClsName = shadowTemp[0];
+    
+    if (compObj.props['childInline.']) {
+      if (hasClass_(compObj.props.className,'rewgt-unit'))
+        iFlag = 2;
+      else iFlag = 3;
+    }
+    else {
+      if (hasClass_(compObj.props.className,'rewgt-unit'))
+        iFlag = 1;
+      // else iFlag = 0;
+    }
+    
+    Object.assign(dProp,compObj.props);
+    objGui.dataset.forEach( function(item) { // take data-* aria-* as stated props
+      var value = objState[item];
+      if (value !== undefined)
+        dProp[item] = value;
+    });
+    bStated.forEach( function(item) {
+      var value = objState[item];
+      if (value !== undefined)
+        dProp[item] = value;
+    });
+    bSilent.forEach( function(item) {
+      delete dProp[item];
+    });
+    bDefault.forEach( function(sAttr) {
+      var value = dDefault[sAttr];
+      if (value === undefined) {       // 'undefined' match any of none-number
+        if (typeof dProp[sAttr] != 'number')
+          delete dProp[sAttr];
+      }
+      else if (quickCheckEqual_(value,dProp[sAttr]))
+        delete dProp[sAttr];
+    });
+    
+    delete dProp.children;
+    delete dProp['hasStatic.'];        // can restore by analyse
+    
+    Object.keys(dProp).forEach( function(item) {  // includes 'isPre.'
+      var value = dProp[item];
+      if (value === undefined)
+        delete dProp[item];            // remove all 'undefined' value
+      else if (typeof value == 'function') {
+        delete dProp[item];
+        if (!isUnderLinker(compObj.widget))
+          console.log('warning: can not dump function property (' + item + ')');
+      }
+    });
+    delete dProp.key;
+    if (sKey) dProp.key = sKey;
+    if (isTopmost) {
+      delete dProp.left;
+      delete dProp.top;
+    }
+    if (dProp.style && Object.keys(dProp.style).length == 0)
+      delete dProp.style;
+    
+    // step 2: scan children
+    var bSubRet = [];
+    if (!compObj.props['noSaveChild.'] && sLink === undefined) {
+      var hasFor = !!objGui.forExpr, compNode = null;
+      var bComp = hasFor?objGui.comps2:objGui.comps;
+      bComp.forEach( function(child) {
+        if (!child) return;
+        if (hasFor) {
+          scanOneLevelEle(bSubRet,child,iFlag);
+          return;
+        }
+        
+        var sKey = getElementKey_(child);
+        if (!sKey) return;
+        
+        if (isTopmost && sKey[0] == '$') {
+          if (sKey == '$pop') return; // ignore popup window widget
+          if (sKey[1] == '$' && child.props['isTemplate.']) return; // ignore .body.$$template
+        }
+        
+        var child_ = wdgt[sKey];
+        if (child_)
+          dumpReactTree_(bSubRet,child_,sPath);
+        else {
+          if (hasClass_(child.props.className,'rewgt-static')) {
+            if (!compNode)
+              compNode = ReactDOM.findDOMNode(compObj);
+            var sName = child.props.name, bHtml = [];
+            if (compNode && sName) {
+              var node = compNode.querySelector('.rewgt-static[name="' + sName + '"]');
+              if (node) {
+                for (var i=0,subItem; subItem = node.children[i]; i+=1) {
+                  bHtml.push(subItem.outerHTML);
                 }
               }
-              if (bHtml.length)
-                bSubRet.push(['',{'html':bHtml},iFlag]); // iFlag is owner's flag // sTempName is '', means it is static text
             }
-            // else, unknown format, ignore
+            if (bHtml.length)
+              bSubRet.push(['',{'html':bHtml},iFlag]); // iFlag is owner's flag // sTempName is '', means it is static text
           }
-        });
-      }
-      
-      var bWgtInfo = [sClsName,dProp,iFlag];
-      if (bSubRet.length) {
-        bSubRet.unshift(bWgtInfo);
-        bRet.push(bSubRet);
-      }
-      else bRet.push(bWgtInfo);  // no child: typeof item[0] == 'string'
+          // else, unknown format, ignore
+        }
+      });
     }
-  }
-  else {
-    console.log('warning: widget (' + sPath + ') is null.');
+    
+    if (hasHtmlTxt) {
+      if (bSubRet.length)
+        delete dProp['html.'];
+      else {
+        var sHtml = compObj.state['html.'];
+        if (!sHtml || typeof sHtml != 'string')
+          delete dProp['html.'];
+        else dProp['html.'] = sHtml;
+      }
+    }
+    else delete dProp['html.'];
+    
+    var bWgtInfo = [sClsName,dProp,iFlag];
+    if (bSubRet.length) {
+      bSubRet.unshift(bWgtInfo);
+      bRet.push(bSubRet);
+    }
+    else bRet.push(bWgtInfo);  // no child: typeof item[0] == 'string'
   }
   
   function getWidgetTempInfo(t) {
-    return [t._className,t._statedProp || [],t._slientProp || [],t._defaultProp || {}];
+    return [t._className,t._statedProp || [],t._silentProp || [],t._defaultProp || {}, t._htmlText];
   }
   
   function isUnderLinker(wdgt) {
@@ -3425,6 +3832,64 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
     if (comp && (comp.props['data-unit.path'] || comp.props['data-span.path']))
       return true;
     else return isUnderLinker(wdgt.parent);
+  }
+  
+  function scanOneLevelEle(bRet,ele,iFlag) {
+    if (hasClass_(ele.props.className,'rewgt-static')) {
+      var sName = ele.props.name, idx = parseInt(sName);
+      if (typeof idx == 'number' && idx < 0x100000) {  // from global
+        var bList = W.$staticNodes[idx];
+        if (Array.isArray(bList)) {
+          var bHtml = [];
+          for (var i2=0,item2; item2 = bList[i2]; i2++) {
+            bHtml.push(item2.outerHTML);
+          }
+          if (bHtml.length)
+            bRet.push(['',{'html':bHtml},iFlag]); // iFlag is owner's flag
+        }
+      }
+    }
+    else {
+      var eleType = ele.type, evSet = eleType && eleType.prototype.$eventset;
+      if (evSet) {
+        var clsName = evSet[2], dProp = Object.assign({},ele.props);
+        var bChild = dProp.children;
+        delete dProp.children;
+        
+        // dProp includes default props, but no 'keyid.' 'hookTo.'
+        var subFlag = 0;
+        if (dProp['childInline.']) {
+          if (hasClass_(dProp.className,'rewgt-unit'))
+            subFlag = 2;
+          else subFlag = 3;
+        }
+        else {
+          if (hasClass_(dProp.className,'rewgt-unit'))
+            subFlag = 1;
+          // else subFlag = 0;
+        }
+        Object.keys(dProp).forEach( function(sKey) {
+          if (sKey.slice(-1) == '.')
+            delete dProp[sKey];
+        });
+        
+        var bSubRet = [];
+        if (bChild) {
+          if (!Array.isArray(bChild)) bChild = [bChild];
+          bChild.forEach( function(child) {
+            if (!child) return;
+            scanOneLevelEle(bSubRet,child,subFlag);
+          });
+        }
+        
+        var bInfo = [clsName,dProp,subFlag];
+        if (bSubRet.length) {
+          bSubRet.unshift(bInfo);
+          bRet.push(bSubRet);
+        }
+        else bRet.push(bInfo);
+      }
+    }
   }
 }
 
@@ -3456,6 +3921,7 @@ function popDesigner_(comp,sWhich,toolOpt,baseUrl) {
   
   // compObj can be HTMLElement or react component
   var inValue = toolOpt.get(compObj); // inValue should be null or json-able data
+  if (inValue === null) return false;
   
   lastDesignTaskId_ += 1;
   lastDesignTask_ = [lastDesignTaskId_,compObj,toolOpt]; // compObj maybe changed to node
@@ -3466,7 +3932,7 @@ function popDesigner_(comp,sWhich,toolOpt,baseUrl) {
 function saveDesigner_(beClose,taskId,outValue) {
   if (lastDesignTask_ && lastDesignTask_[0] == taskId) {
     var compObj = lastDesignTask_[1], toolOpt = lastDesignTask_[2];
-    lastDesignTask_ = null;
+    if (beClose) lastDesignTask_ = null;
     toolOpt.set(compObj,outValue,beClose);
   }
 }
@@ -3526,17 +3992,30 @@ function staticDbClick(event) {
         staticNode.innerHTML = sHtml;
         
         // save to W.$staticNodes
-        var idx = parseInt(sName), bList = null;
-        if (typeof idx == 'number' && idx < 0x100000) {
-          bList = W.$staticNodes[idx];
-          if (Array.isArray(bList)) {  // can replace old one
-            bList = W.$staticNodes[idx] = [];
-            for (var i=0,item; item=staticNode.children[i]; i+=1) {
-              bList.push(item);
+        var idx = parseInt(sName);
+        if (typeof idx == 'number') {
+          var gui = compObj.$gui, dStatic = gui.statics, bList = [];
+          if (!dStatic) dStatic = gui.statics = {};
+          for (var i=0,item; item=staticNode.children[i]; i+=1) {
+            bList.push(item);
+          }
+          
+          if (idx >= 0x100000)
+            dStatic[sName] = bList;
+          else {  // global --> local
+            var iLen = gui.comps.length, newName = (0x100000 + gui.removeNum + iLen) + '';
+            for (var i=0; i < iLen; i++) {
+              var child = gui.comps[i];
+              if (child && hasClass_(child.props.className,'rewgt-static') && child.props.name === sName) {
+                gui.comps[i] = React.cloneElement(child,{name:newName}); // for dumpReactTree
+                break;
+              }
             }
+            
+            dStatic[newName] = bList;
+            staticNode.setAttribute('name',newName);
           }
         }
-        // else, idx >= 0x100000 means from local, which is not editable since it auto generated (like markdown)
         
         // notify backup current doc
         if (W.__design__) {
@@ -3892,8 +4371,8 @@ function loadReactTree_(container,bTree,callback) {
 }
 
 var RE_UPCASE_ALL_ = /([A-Z])/g;
- 
-function streamReactTree_(bTree,iLevel) {
+
+function streamReactTree_(bTree,iLevel,iOwnerFlag) {
   iLevel = iLevel || 0;
   function headSpace() {
     return (new Array(iLevel + 1)).join('  ');
@@ -3911,13 +4390,13 @@ function streamReactTree_(bTree,iLevel) {
     dProp = bTree[1];
     iFlag = bTree[2];
   }
-  if (iFlag === undefined) iFlag = 1;
+  if (typeof iFlag != 'number') iFlag = 1;
   
   var sHeadSpace = headSpace(), sRet = sHeadSpace;
   if (!sName) {
     var bHtml = dProp.html || [];
-    var sTag = iFlag <= 1? "<div class='rewgt-static'>": "<span class='rewgt-static'>";
-    var sTail = iFlag <= 1? '</div>': '</span>';
+    var sTag = iOwnerFlag <= 1? "<div class='rewgt-static'>": "<span class='rewgt-static'>";
+    var sTail = iOwnerFlag <= 1? '</div>': '</span>'; // iFlag is parent node's flag, 1 means 'childInline.'==false && rewgt-unit
     
     if (bHtml.length == 0)
       sRet = '';
@@ -3934,53 +4413,81 @@ function streamReactTree_(bTree,iLevel) {
     return sRet;
   }
   
-  var isLink = false;
+  var isLink = false, isPre = false;
   if (sName == 'RefDiv') {
-    isLink = true;
-    sRet += '<div $=' + JSON.stringify(dProp['$'] || '');
+    isLink = true; isPre = dProp['isPre.']; iChildNum = 0;  // iFlag == 2
+    sRet += (isPre?'<pre $=':'<div $=') + JSON.stringify(dProp['$'] || '');
   }
-  else if (sName == 'RefSpan') {
-    isLink = true;
+  else if (sName == 'RefSpan') {  // iFlag == 3
+    isLink = true; iChildNum = 0;
     sRet += '<span $=' + JSON.stringify(dProp['$'] || '');
   }
   else {
     if (iFlag == 3)
-      sRet += '<span :t=' + sName;
-    else sRet += '<div :t=' + sName;
+      sRet += '<span $=' + sName;
+    else {
+      isPre = dProp['isPre.'];
+      if (isPre) iChildNum = 0;   // force to no children
+      sRet += (isPre?'<pre $=':'<div $=') + sName;
+    }
   }
   
   var sKey_ = dProp.key, sHtmlTxt = dProp['html.'];
   if (sKey_) sRet += " key='" + sKey_ + "'";
   
-  for (var sKey in dProp) {
-    if (sKey == 'key' || sKey == 'html.' || sKey == '$') continue;
+  Object.keys(dProp).forEach( function(sKey) {
+    if (sKey == 'key' || sKey == 'html.' || sKey == '$' || sKey == 'isPre.') return;
     
     var value = dProp[sKey];
-    if (value === undefined) continue;
+    if (value === undefined) return;
     
     sRet += ' ' + sKey.replace(RE_UPCASE_ALL_,'-$1').toLowerCase() + '=';
-    if (typeof value == 'string' && (!value || value[0] != '{' || value.slice(-1) != '}'))
-      sRet += JSON.stringify(value);
-    else sRet += "'{" + JSON.stringify(value).replace(/'/g,"\\'") + "}'";  // replace '
-  }
+    if (typeof value == 'string' && (sKey[0] == '$' || !value || value[0] != '{' || value.slice(-1) != '}'))
+      sRet += "'" + adjustTagAttr(value) + "'";
+    else sRet += "'{" + adjustTagAttr(JSON.stringify(value)) + "}'";
+  });
   
-  if (iChildNum) {
-    sRet += '>\n'
+  var subRet = '';
+  if (iChildNum) {  // isPre must be false
     for (var i=1,item; item=bTree[i]; i+=1) {
-      sRet += streamReactTree_(item,iLevel+1);
+      subRet += streamReactTree_(item,iLevel+1,iFlag);
     }
-    sRet += sHeadSpace;
+    
+    if (iFlag == 3) {
+      if (subRet.startsWith(sHeadSpace + '  '))
+        sRet += ('>' + subRet.slice(sHeadSpace.length+2));
+      else sRet += ('>' + subRet);
+    }
+    else sRet += ('>\n' + subRet);
   }
   else {
     sRet += '>';
-    if (sHtmlTxt)
-      sRet += htmlEncode(sHtmlTxt);
+    if (sHtmlTxt) {
+      if (isPre)
+        sRet += sHtmlTxt;
+      else sRet += sHtmlTxt.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    }
   }
   
-  if (iFlag == 3)
-    sRet += '</span>\n';
-  else sRet += '</div>\n';
+  if (isPre)
+    sRet += '</pre>\n';
+  else {
+    if (iFlag == 3) {
+      if (subRet && subRet.slice(-1) == '\n') // has children
+        sRet += (sHeadSpace + '</span>\n');
+      else sRet += '</span>\n';
+    }
+    else {
+      if (sHtmlTxt || sRet.slice(-1) != '\n')
+        sRet += '</div>\n';
+      else sRet += (sHeadSpace + '</div>\n'); // no 'html.' and end with '\n', let it look better
+    }
+  }
   return sRet;
+  
+  function adjustTagAttr(s) {
+    return s.replace(/&/g,"&amp;").replace(/'/g,"&#39;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); // "'
+  }
 }
 
 // API for reference by path
@@ -4099,7 +4606,7 @@ utils.gotoHash = function(sHash,callback,wdgt) { // overwrite previous dummy fun
     }
     
     comp.fireChecked(item, function() {
-      if (comp.state.checkedId != item)
+      if (comp.state.checkedId !== item)
         return doCallback(true);
       
       bRetSeg.push(item);
@@ -4161,7 +4668,7 @@ function getCompByPath_(entry,sPath_) { // entry is component object
     if (owner)
       return doCallback(sPath?owner.W(sPath):owner);
   }
-  else if (iLevel == -1) {
+  else if (iLevel == -1) { // not isSibling means is absolute
     if (sPath)
       return doCallback(W.W(sPath));
   }
@@ -4205,7 +4712,7 @@ function templateNode(ele) { // new templateNode(element)
   this.pathSeg = ''; // ele['hookTo.'].comps[pathSeg] === this when ele['hookTo.'] is templateNode
 }
 
-function loadReference_(entry, keyName, callback) { // keyName must be string, callback must passed
+function loadReference_(entry, keyName, callback) { // entry is linker owner component, keyName must be string, callback must passed
   var isRefSpan = false, bSourProp = [], refLnkPath = '';
   var child, compIdx = entry.$gui.compIdx[keyName];
   if (entry.widget && typeof compIdx == 'number' && keyName[0] == '$' && (child = entry.$gui.comps[compIdx]) && child.props['isReference.']) {
@@ -4221,7 +4728,7 @@ function loadReference_(entry, keyName, callback) { // keyName must be string, c
     else {
       if (!refLnkPath)
         doCallback(null,refLnkPath);
-      else loadCompByRef(entry,refLnkPath,'');  // entry is parent component of a linker
+      else loadCompByRef(entry,refLnkPath,'');  // entry is parent component of linker
     }
   }
   else {
@@ -4238,28 +4745,16 @@ function loadReference_(entry, keyName, callback) { // keyName must be string, c
     if (isSibling) {
       if (isTemplate)
         return doCallback(null,sPath_);  // not support
+      // else, entry is owner component of linker
       
-      var targ = entry.widget;
-      if (iLevel < 0) {
-        targ = targ && targ.parent; // start with '//'
-        
-        if (targ && !sPath) {
-          var targObj = targ.component;
-          var targOwn = targ.parent, targOwnObj = targOwn && targOwn.component;
-          if (targObj && targOwnObj) {
-            var iPos = targOwnObj.$gui.compIdx[targObj.$gui.keyid];
-            if (typeof iPos == 'number')
-              return doCallback(targOwnObj.$gui.comps[iPos],sPath_);
-          }
-          return doCallback(null,sPath_);
-        }
-      }
-      if (targ) {
+      var targ;
+      if (iLevel < 0 && (targ=entry.widget)) { // only get from linker parent, not from linker self
         getComponent(targ,sPath,sPath_,false);
         return;
       }
+      // else, failed // iLevel >= 0 or invalid entry
     }
-    else if (iLevel == -1) {
+    else if (iLevel == -1) {  // by absolute
       getComponent(null,sPath,sPath_,false);
       return;
     }
@@ -4513,19 +5008,18 @@ function loadReference_(entry, keyName, callback) { // keyName must be string, c
               if (isRefSpan != isRefSpan2)
                 utils.instantShow('warning: reference type (' + sPath_ + ') mismatch.');
               
-              var ch = sPath2_[0];
-              if (ch != '/' && ch != '.') {   // try get sibling element
-                if (sPath2_.indexOf('/') >= 0)
+              if (sPath2_[0] == '/' && sPath2_[1] == '/') { // try get sibling element
+                if (sPath2_.indexOf('/',2) >= 0)
                   return doCallback(null,sPath2_);
                 
                 bSeg = tempPath.split('.');
                 bSeg.pop();
                 tempPath = bSeg.join('.');    // parent_path = parentPath(this_ref_node), maybe ''
                 
-                bSeg = sPath2_.split('.');
+                bSeg = sPath2_.slice(2).split('.');
                 if (tempPath) tempPath += '.';
                 tempPath += bSeg.shift();
-                b = tempNode.comps[tempPath]; // tempNode not changed
+                b = tempNode.comps[tempPath]; // tempNode not changed  // if !b, will failed
                 bSourProp.push(compProp2);
                 continue;
               }
@@ -4670,8 +5164,12 @@ pageCtrl_.prototype = {
   },
   
   gotoPage: function(pgIndex,callback) {
-    var sFirstSeg = '', sLeftSeg = '', jumpedWdgt = null;
+    if (!this.keys.length) {
+      if (callback) callback('');
+      return;
+    }
     
+    var sFirstSeg = '', sLeftSeg = '', jumpedWdgt = null;
     function doCallback() {
       if (sFirstSeg && sLeftSeg && jumpedWdgt) {
         utils.gotoHash(sLeftSeg, function(sRet) {
@@ -4735,6 +5233,33 @@ pageCtrl_.prototype = {
     return this.gotoPage(this.pageIndex + 1);
   },
   
+  renewPages: function(bNew) { // bNew=[[sKey,comp],...]
+    var bKey = [], dName = {};
+    bNew.forEach( function(item) {
+      var sKey = item[0]
+      if ((parseInt(sKey)+'') !== sKey)
+        dName[sKey] = bKey.length;
+      bKey.push(sKey);
+    });
+    
+    var sCurr = this.keys[this.pageIndex], noShift = true;
+    if (typeof sCurr == 'string') {
+      var iPos = bKey.indexOf(sCurr);
+      if (iPos >= 0) {
+        this.pageIndex = iPos;
+        noShift = true;
+      }
+    }
+    this.keys = bKey;
+    this.namedPage = dName;
+    
+    if (!noShift) {
+      if (bKey.length)
+        this.gotoPage(0);
+      else this.pageIndex = 0; // no jump
+    }
+  },
+  
   setDisplay: function(cfg) {
     if (cfg.hasOwnProperty('leftCtrlWidth'))
       this.leftPanel.style.width = getPxWidth(cfg.leftCtrlWidth) + 'px';
@@ -4763,6 +5288,8 @@ pageCtrl_.prototype = {
   },
 };
 
+creator.pageCtrl_ = pageCtrl_;
+
 function listScenePage_() {
   var bPage = [], topObj = topmostWidget_ && topmostWidget_.component;
   if (topObj) {
@@ -4770,8 +5297,10 @@ function listScenePage_() {
       if (!child) return;
       var sKey = getElementKey_(child), childObj = sKey && topmostWidget_[sKey];
       childObj = childObj && childObj.component;
-      if (childObj && childObj.props['isScenePage.'])
-        bPage.push([sKey,childObj]);
+      if (childObj && childObj.props['isScenePage.']) {
+        if (W.__design__ || !childObj.props.noShow) // if !W.__design__ && noShow, no including
+          bPage.push([sKey,childObj]);
+      }
     });
   }
   return bPage;
@@ -4819,7 +5348,16 @@ W.$main.$$onLoad_ = function(designCallback) {
             if (designCallback) designCallback();
           }
           else {
-            var fn, onLoad = W.$main.$onLoad;
+            var fn, onReady = W.$main.$onReady;
+            if (Array.isArray(onReady)) {
+              while (fn = onReady.shift()) {
+                fn();
+              }
+            }
+            else if (typeof onReady == 'function')
+              onReady();
+            
+            var onLoad = W.$main.$onLoad;
             if (Array.isArray(onLoad)) {
               while (fn = onLoad.shift()) {
                 fn();
@@ -4902,7 +5440,7 @@ var supportedAttr_ = { // 5 reserved for special precessing
   className: 5, style: 5, width: 5, height: 5,
 };
 
-function getSparedPixel_(obj, wdgt, isRow, iTotal) {
+function getSparedPixel_(obj, wdgt, isRow, iTotal) { // iTotal is cssWidth or cssHeight
   if (typeof iTotal != 'number') return null;
   
   var bColumn,cellSpace, iRet = iTotal, gui = obj.$gui;
@@ -4915,6 +5453,7 @@ function getSparedPixel_(obj, wdgt, isRow, iTotal) {
     cellSpace = parseFloat(obj.props.cellSpacing) || 0;
   }
   
+  // next process sizes-column
   if (Array.isArray(bColumn)) {
     var iLen = bColumn.length;
     for (var i = 0; i < iLen; i++) {
@@ -4937,6 +5476,7 @@ function getSparedPixel_(obj, wdgt, isRow, iTotal) {
     else return iRet;
   }
   
+  // next process one line array
   var b = gui.comps, iLen = b.length;
   for (var i = 0; i < iLen; i++) {
     var child = b[i];
@@ -4960,7 +5500,8 @@ function getSparedPixel_(obj, wdgt, isRow, iTotal) {
   }
   
   iRet -= cellSpace * (1 + iLen);
-  if (iRet <= 0) return null; // if no enough space, take as 'auto'
+  if (iRet <= 0)
+    return null; // if no enough space, take as 'auto'
   else return iRet;
 }
 
@@ -4982,29 +5523,50 @@ function setupContainerApi_(containNode_) {
   };
 }
 
-function renewStaticChild(compObj) {
+function renewStaticChild(compObj,isForce) {
   var node = ReactDOM.findDOMNode(compObj);
   if (!node) return;
   
-  for (var i = 0, item; item = node.children[i]; i++) {
-    if (!item.classList.contains('rewgt-static')) continue;
-    if (item.children.length > 0) continue; // already added, ignore
-    
-    var sName = item.getAttribute('name'), bList = null, fromLocal = false;
-    if (sName) {
-      var idx = parseInt(sName);
-      if (typeof idx == 'number') {
-        if (idx >= 0x100000) {  // from local
-          fromLocal = true;
-          var d = compObj.$gui.statics;
-          bList = d && d[sName];
+  var bScan = [], nodes = node.querySelectorAll('.rewgt-static');
+  for (var i=0,item; item = nodes[i]; i++) {
+    var tmp = item.parentNode, canRenew = false;
+    while (tmp) {
+      if (tmp === document) break;
+      if (tmp === node) {
+        canRenew = true;
+        break;
+      }
+      if (tmp.classList.contains('rewgt-static')) // only focus one rewgt-static level
+        break;
+      tmp = tmp.parentNode;
+    }
+    if (canRenew) {
+      var sName = item.getAttribute('name') || undefined, idx = sName && parseInt(sName);
+      if (!isNaN(idx)) {
+        if (item.children.length > 0) {
+          if (isForce && idx >= 0x100000)  // only local static can force reset
+            item.innerHTML = '';
+          else continue;  // already added, ignore
         }
-        else bList = W.$staticNodes[idx]; // from global
+        bScan.push([idx,sName,item]);
       }
     }
+  }
+  
+  for (var i=0,item; item = bScan[i]; i++) {
+    var bList, idx = item[0], sName = item[1], node2 = item[2];
+    var fromLocal = idx >= 0x100000;
+    
+    if (fromLocal) {  // from local
+      var d = compObj.$gui.statics;
+      bList = d && d[sName];
+    }
+    else bList = W.$staticNodes[idx];
+    
     if (Array.isArray(bList)) {
       for (var i2 = 0, item2; item2 = bList[i2]; i2++) {
-        item.appendChild(fromLocal?item2:item2.cloneNode(true));
+        // if from global, add by clone and keep $staticNodes for dumping element under $for
+        node2.appendChild(fromLocal?item2:item2.cloneNode(true));
       }
     }
   }
@@ -5068,32 +5630,35 @@ function renewWidgetSpared_(comp,isForce,callback) {
 }
 creator.renewWidgetSpared = renewWidgetSpared_;
 
-function triggerExprFn_(thisObj) {
-  return ( function(value,oldValue) {
-    if (typeof value != 'object') return;
-    
-    if (!Array.isArray(value))
-      value = [['',value]];
-    
-    thisObj.state.trigger = value;
-    value.forEach( function(item) {
-      if (Array.isArray(item)) {
-        var sPath = item[0], modifier = item[1];
-        if (typeof sPath != 'string' || !modifier) return;
-        
-        var targ = sPath? getCompByPath_(thisObj,sPath): thisObj;
-        if (!targ) {
-          console.log('warning: can not find trigger target (' + sPath + ')');
-          return;
+function triggerExprFn_(value,oldValue) { // will auto bind this
+  var isOK = false;
+  if (value) {
+    var tp = typeof value;
+    if (tp == 'string') {
+      value = [value];
+      isOK = true;
+    }
+    else if (tp == 'object') {
+      if (Array.isArray(value)) {
+        var modifier;
+        if (typeof value[0] == 'string' && (typeof (modifier=value[1]) == 'object')) {
+          if (typeof modifier.$trigger != 'string') // value is [sPath,modifier]
+            value = [value];
+          // else, value is action array, not copy by value.slice(0)
         }
-        if (!targ.duals.hasOwnProperty('data')) return;
-        
-        setTimeout( function() {
-          targ.duals.data = ex.update(targ.duals.data,modifier);
-        },0);
+        // else, value is action array
+        isOK = true;
       }
-    });
-  });
+      else if (typeof value.$trigger == 'string') {
+        value = [value];      // newOpt for pop window
+        isOK = true;
+      }
+    }
+  }
+  if (!isOK)
+    throw new Error('invalid trigger data (key=' + this.$gui.keyid + ')');
+  
+  this.state.trigger = value; // default not fire action
 }
 
 var _hyphenPattern = /-(.)/g;
@@ -5104,9 +5669,10 @@ class TWidget_ {
     this._classDesc = desc || '';
     
     this._statedProp = ['width','height','left','top'];
-    this._slientProp = ['className','hookTo.','keyid.','childInline.'];
+    this._silentProp = ['className','hookTo.','keyid.','childInline.'];
     this._defaultProp = {width:0.9999, height:0.9999, left:0, top:0};
-    this._docUrl = 'doc';  // locate to: doc/{this._className}.html
+    this._htmlText = false; // not use 'html.'
+    this._docUrl = 'doc';   // locate to: doc/{this._className}.html
   }
   
   _desc() {
@@ -5137,7 +5703,7 @@ class TWidget_ {
     var savedMethod = this._methods;
     if (!savedMethod) {
       var sKey, dEvent = {}, dSysEvent = {};
-      savedMethod = this._methods = { $eventset: [dEvent, dSysEvent] };
+      savedMethod = this._methods = { $eventset:[dEvent,dSysEvent] };
       
       var dItem = {}; // not use Object.getOwnPropertyNames(this), babel take methods not-enumerable
       var proto = Object.getPrototypeOf(this);
@@ -5177,7 +5743,7 @@ class TWidget_ {
     
     var ret = Object.assign({},savedMethod), bTmp = ret.$eventset;
     var dEvent = Object.assign({},bTmp[0]), dSysEvent = Object.assign({},bTmp[1]);
-    ret.$eventset = [dEvent,dSysEvent];
+    ret.$eventset = [dEvent,dSysEvent,this._className];
     
     // then, extend customized definition
     if (!defs) defs = {};
@@ -5223,7 +5789,6 @@ class TWidget_ {
       editable: 'all',     // all, some, none
       baseUrl: '/app/files/rewgt/web',
       tools: [],
-      // mediaType, icon, registed, canPreview
     };
   }
   
@@ -5318,6 +5883,29 @@ class TWidget_ {
     return this; // can write as: this.undefineDual(attr1).undefineDual(attr2)
   }
   
+  setEvent(evSet) {
+    var gui = this.$gui, eventset = gui && gui.eventset;
+    if (!gui || !eventset) {
+      console.log('error: invalid state for setEvent().');
+      return;
+    }
+    if (gui.compState > 1) {
+      console.log('error: can not call setEvent() after first render.');
+      return;
+    }
+    
+    var b = Object.keys(evSet);
+    for (var i=0,sKey; sKey=b[i]; i++) {
+      if (sKey[0] != '$') continue;
+      var sKey2 = sKey.slice(1), fn = evSet[sKey];
+      if (typeof fn == 'function') {
+        if (!eventset[sKey2])
+          eventset[sKey2] = fn.bind(this);
+        this[sKey] = fn;
+      }
+    }
+  }
+  
   getInitialState() {
     // step 1: define template as 'this._'
     var template = this.getShadowTemplate();
@@ -5334,6 +5922,7 @@ class TWidget_ {
       id__:0, id2__:0,        // id2__ != 0 means 'duals.id__ = xx' in assigning
       sparedX:null, sparedY:null,
     };
+    
     var eventset  = gui.eventset = {};  // regist event callback
     var tagAttrs  = gui.tagAttrs = [];  // list tag-attribute
     var dualAttrs = gui.dualAttrs = {}; // {attrName:'dual-attr-name'}
@@ -5398,9 +5987,14 @@ class TWidget_ {
               }
             }
             else {
-              if (item != 'key')
+              if (item == 'children') {
+                if (this.props.hasOwnProperty('for.index')) { // $children only used under forExpr
+                  gui.isChildExpr = true;
+                  gui.children2 = this.props.children;
+                }
+              }
+              else if (item != 'key') // use $key, $children as normal prop, updated in parent for-loop
                 exprAttrs.push(item);
-              // else, take '$key' as normal prop
             }
             continue;
           }
@@ -5444,7 +6038,7 @@ class TWidget_ {
     }
     
     // step 4: prepare dState
-    if (isTopmost)  // ensure class of topmost panel is correct, className is fixed, no changing
+    if (isTopmost) // topmost can not be panel, NOT render children as flex
       gui.className = removeClass_(gui.className, ['rewgt-panel', 'row-reverse', 'reverse-row', 'col-reverse', 'reverse-col']);
     Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
     var dState = { id__:0, childNumId:0, duals:[], exprAttrs:exprAttrs.slice(0) }; // state.duals = [[attr,newValue], ...]
@@ -5476,6 +6070,7 @@ class TWidget_ {
     Object.assign(dState, { left:0, top:0, width:null, height:null,
       minWidth:0, maxWidth:0, minHeight:0, maxHeight:0,
       borderWidth:[0,0,0,0], padding:[0,0,0,0], margin:[0,0,0,0],
+      klass:'', style:{},
     });
     
     var isPanelWdgt = gui.isPanel = hasClass_(gui.className,'rewgt-panel'); // gui.isPanel is fixed
@@ -5501,10 +6096,10 @@ class TWidget_ {
     
     this.defineDual('klass', function(value,oldValue) {
       this.state.klass = value || '';
-    },'');
+    });
     this.defineDual('style', function(value,oldValue) {
-      this.state.style = Object.assign({},oldValue,value);
-    },{});
+      this.state.style = Object.assign({},oldValue,value); // no check style.position is absolute or not
+    });
     this.defineDual('left', function(value,oldValue) {
       this.state.left = isNaN(value)? null: value; // isNaN(null) is false
     });
@@ -5576,10 +6171,34 @@ class TWidget_ {
       this.state.maxHeight = i;
     });
     this.defineDual('borderWidth', function(value,oldValue) {
-      this.state.borderWidth = parseWidth(value);
+      var oldV = oldValue || [0,0,0,0];
+      var newV = this.state.borderWidth = parseWidth(value);
+      
+      var changed = false;
+      if (this.$gui.useSparedX) {
+        if (oldV[1] !== newV[1] || oldV[3] !== newV[3])
+          changed = true;
+      }
+      else if (this.$gui.useSparedY) {
+        if (oldV[0] !== newV[0] || oldV[2] !== newV[2])
+          changed = true;
+      }
+      if (changed) renewWidgetSpared_(this,false);
     });
     this.defineDual('padding', function(value,oldValue) {
-      this.state.padding = parseWidth(value);
+      var oldV = oldValue || [0,0,0,0];
+      var newV = this.state.padding = parseWidth(value);
+      
+      var changed = false;
+      if (this.$gui.useSparedX) {
+        if (oldV[1] !== newV[1] || oldV[3] !== newV[3])
+          changed = true;
+      }
+      else if (this.$gui.useSparedY) {
+        if (oldV[0] !== newV[0] || oldV[2] !== newV[2])
+          changed = true;
+      }
+      if (changed) renewWidgetSpared_(this,false);
     });
     this.defineDual('margin', function(value,oldValue) {
       this.state.margin = parseWidth(value);
@@ -5590,37 +6209,42 @@ class TWidget_ {
     });  // default this.state.id__ is 0
     if (dualIdSetter) this.defineDual('id__',dualIdSetter);
     
-    this.defineDual('trigger',triggerExprFn_(this));
+    this.defineDual('trigger',triggerExprFn_); // default value is undefined
     this.defineDual('cellSpacing'); // will override in GridPanel
     this.defineDual('sizes');       // will override in GridPanel
     
     if (owner) {
       var ownerObj = owner && owner.component;
-      if (ownerObj && ownerObj.props['isTableRow.']) {
-        if (this.props.tdStyle) {
-          this.defineDual('tdStyle', function(value,oldValue) {
-            this.state.tdStyle = Object.assign({},oldValue,value);
-            setTimeout( function() {
-              ownerObj.reRender();
-            },0);
-          },this.props.tdStyle);
+      if (ownerObj) {
+        if (ownerObj.props['isTableRow.']) {
+          if (this.props.tdStyle) {
+            this.defineDual('tdStyle', function(value,oldValue) {
+              this.state.tdStyle = Object.assign({},oldValue,value);
+              setTimeout( function() {
+                ownerObj.reRender();
+              },0);
+            },this.props.tdStyle);
+          }
+          if (this.props.colSpan) {
+            this.defineDual('colSpan', function(value,oldValue) {
+              this.state.colSpan = value;
+              setTimeout( function() {
+                ownerObj.reRender();
+              },0);
+            },this.props.colSpan);
+          }
+          if (this.props.rowSpan) {
+            this.defineDual('rowSpan', function(value,oldValue) {
+              this.state.rowSpan = value;
+              setTimeout( function() {
+                ownerObj.reRender();
+              },0);
+            },this.props.rowSpan);
+          }
         }
-        if (this.props.colSpan) {
-          this.defineDual('colSpan', function(value,oldValue) {
-            this.state.colSpan = value;
-            setTimeout( function() {
-              ownerObj.reRender();
-            },0);
-          },this.props.colSpan);
-        }
-        if (this.props.rowSpan) {
-          this.defineDual('rowSpan', function(value,oldValue) {
-            this.state.rowSpan = value;
-            setTimeout( function() {
-              ownerObj.reRender();
-            },0);
-          },this.props.rowSpan);
-        }
+        
+        if (ownerObj.props['isScenePage.'])
+          gui.inScene = true;  // not used yet, for extending
       }
     }
     
@@ -5674,8 +6298,6 @@ class TWidget_ {
           }
         }).bind(this);
         
-        if (typeof containNode_.instantShow == 'function')
-          W.$utils.instantShow = containNode_.instantShow;  // overwrite old function
         containNode_.refreshFrame = refreshFrame;
         setupContainerApi_(containNode_);
         
@@ -5725,7 +6347,7 @@ class TWidget_ {
       
       var thisObj = this;
       var hookThis = thisObj.widget;
-      if (!hookThis) return; // fatal error
+      if (!hookThis) return;  // fatal error
       
       var bColumn = thisObj.state.sizes, useSizes = Array.isArray(bColumn);
       var compIdx = gui.compIdx, bComp = gui.comps, isScenePage = thisObj.props['isScenePage.'];
@@ -5733,7 +6355,15 @@ class TWidget_ {
       
       bComp.forEach( function(child,iPos) {
         if (typeof child == 'string') {
-          if (!childInline) return; // just ignore
+          if (iPos == 0 && bComp.length == 1 && thisObj.duals.hasOwnProperty('html.')) {
+            thisObj.state['html.'] = child;
+            bComp[iPos] = undefined;
+            return;
+          }
+          if (!childInline) {
+            bComp[iPos] = undefined;
+            return;
+          }
           child = bComp[iPos] = React.createElement(Span__,{'html.':child}); // auto change to React Element
         }
         else if (!child) return;
@@ -5799,7 +6429,7 @@ class TWidget_ {
         else {   // is pure react element, no checking
           compIdx[keyid] = iPos;
           if (!isOld)
-            bComp[iPos] = React.cloneElement(child,{'keyid.':keyid,key:sKey});
+            bComp[iPos] = React.cloneElement(child,{key:sKey}); // not pass 'keyid.' to avoid react warning
           return;
         }
         
@@ -5908,19 +6538,6 @@ class TWidget_ {
         }
       }
       
-      // rescan navHead and navItems for NavPanel/NavDiv
-      if (this.props['isNavigator.']) {
-        var bNavHead = gui.navHead = [];
-        var bNavItems = gui.navItems = {};
-        var compLen = bComp.length;
-        for (var i=0; i < compLen; i++) {
-          var child = bComp[i]; if (!child) continue;
-          if (child.props['isPlayground.'])
-            bNavItems[child.props['keyid.']] = child;  // must has 'keyid.'
-          else bNavHead.push(child);
-        }
-      }
-      
       if (isTopmost && oldNumId == 0) {
         compIdx['$pop'] = bComp.length + gui.removeNum;
         bComp.push( React.createElement(React.createClass(T.Panel._extend()),{'hookTo.':hookThis, key:'$pop', 'keyid.':'$pop',
@@ -5928,7 +6545,7 @@ class TWidget_ {
           style:{position:'absolute',zIndex:3016,overflow:'visible'}, 
         }));
       }
-    },0);
+    });
     
     return dState;
     
@@ -5968,6 +6585,14 @@ class TWidget_ {
     var gui = this.$gui;
     if (!gui.isPanel && this.props['hasStatic.'])
       renewStaticChild(this);
+    
+    if (gui.syncExpr) { // $expr='all: ...'  or  $expr='strict: ...'
+      var item;
+      while (item = gui.syncExpr.shift()) { // item is [sKey,fn]
+        gui.exprAttrs[item[0]] = item[1];
+      }
+      delete gui.syncExpr;
+    }
     
     var dSubStyles = this.props.styles;
     if (dSubStyles && (this.props['data-span.path'] || this.props['data-unit.path'])) {
@@ -6034,10 +6659,25 @@ class TWidget_ {
     this.isHooked = false;
   }
   
-  reRender(callback) { // should not call reRender in self render()
-    if (this.isHooked)
-      this.setState({id__:identicalId()},callback);
+  reRender(callback,data) { // default data is undefined
+    if (this.isHooked) {
+      if (this.$gui.inSync) {
+        var self = this;
+        setTimeout( function() {
+          var newId = self.state.id__ === identicalId_? identicalId(): identicalId_;
+          var data2 = Object.assign({},data,{id__:newId});
+          self.setState(data2,callback);
+        },0);
+      }
+      else {
+        var newId = this.state.id__ === identicalId_? identicalId(): identicalId_;
+        var data2 = Object.assign({},data,{id__:newId});
+        this.setState(data2,callback);
+      }
+    }
     else {
+      if (data)
+        console.log('warning: reRender() failed when component unavailable.');
       if (callback) callback();
     }
   }
@@ -6436,11 +7076,17 @@ class TWidget_ {
       else argLen -= 1;
     }
     
+    var thisWidget = this.widget, isTopmost = thisWidget === topmostWidget_;
     function doCallback() {
+      if (changed && isTopmost) {
+        var self = thisWidget.component;
+        if (self && self.renewPages)
+          self.renewPages();
+      }
       if (callback) callback(changed);
     }
     
-    var thisWidget = this.widget, gui = this.$gui;
+    var gui = this.$gui;
     if (!thisWidget) {
       utils.instantShow('warning: invalid target widget in setChild().');
       return doCallback();
@@ -6472,7 +7118,7 @@ class TWidget_ {
       }
     }
     
-    var isTopmost = thisWidget === topmostWidget_, currWidgetType = 4; // 1:panel, 2:unit, 3:paragraph, 4:inline
+    var currWidgetType = 4; // 1:panel, 2:unit, 3:paragraph, 4:inline
     if (gui.isPanel || isTopmost)
       currWidgetType = 1;
     else if (hasClass_(gui.className, 'rewgt-unit')) {
@@ -6494,13 +7140,17 @@ class TWidget_ {
       if (sKey_) {
         bKeys.unshift(sKey_);
         
-        var iTmp = parseInt(sKey_);
-        if ((iTmp+'') === sKey_)
-          keyid_ = iTmp;
-        else keyid_ = sKey_;
-        
-        if (keyid_ !== child.props['keyid.'])  // ensure using 'keyid.'
-          bComp[i] = React.cloneElement(child,{'keyid.':keyid_,key:sKey_});
+        if (hasClass_(child.props.className,'rewgt-static'))
+          bComp[i] = React.cloneElement(child,{key:sKey_});
+        else {
+          var iTmp = parseInt(sKey_);
+          if ((iTmp+'') === sKey_)
+            keyid_ = iTmp;
+          else keyid_ = sKey_;
+          
+          if (keyid_ !== child.props['keyid.'])  // ensure using 'keyid.'
+            bComp[i] = React.cloneElement(child,{'keyid.':keyid_,key:sKey_});
+        }
       }
       else {
         bComp.splice(i, 1);
@@ -6831,7 +7481,18 @@ class TWidget_ {
       gui.comps = bComp;
       gui.compIdx = compIdx; // child components re-indexed
       
-      this.reRender(doCallback); // same to this.forceUpdate();
+      if (gui.inSync) {      // still in syncProps_()
+        if (callback || isTopmost) {
+          setTimeout( function() {
+            doCallback();
+          },0);
+        }
+        // else, nothing to process
+      }
+      else {
+        var newId = this.state.id__ === identicalId_? identicalId(): identicalId_;
+        this.setState({id__:newId},doCallback);
+      }
     }
     else {
       doCallback();
@@ -6906,12 +7567,12 @@ class TWidget_ {
     var iBrdT, iBrdR, iBrdB, iBrdL, sBorderWd = '';
     var iMrgT, iMrgR, iMrgB, iMrgL, sMargin = '';
     if (parentWdAuto) {
-      iPadT = 0; iPadR = 0; iPadB = 0; iPadL = 0;
-      sPadding = toCssString(wgtPadding[0], false) + ' ' + toCssString(wgtPadding[1], false) + ' ' + toCssString(wgtPadding[2], false) + ' ' + toCssString(wgtPadding[3], false);
-      iBrdT = 0; iBrdR = 0; iBrdB = 0; iBrdL = 0;
-      sBorderWd = toCssString(wgtBorder[0], true) + ' ' + toCssString(wgtBorder[1], true) + ' ' + toCssString(wgtBorder[2], true) + ' ' + toCssString(wgtBorder[3], true);
-      iMrgT = 0; iMrgR = 0; iMrgB = 0; iMrgL = 0;
-      sMargin = toCssString(wgtMargin[0], false) + ' ' + toCssString(wgtMargin[1], false) + ' ' + toCssString(wgtMargin[2], false) + ' ' + toCssString(wgtMargin[3], false);
+      iPadT = iPadR = iPadB = iPadL = 0;
+      sPadding = toCssString(wgtPadding[0],false) + ' ' + toCssString(wgtPadding[1],false) + ' ' + toCssString(wgtPadding[2],false) + ' ' + toCssString(wgtPadding[3],false);
+      iBrdT = iBrdR = iBrdB = iBrdL = 0;
+      sBorderWd = toCssString(wgtBorder[0],true) + ' ' + toCssString(wgtBorder[1],true) + ' ' + toCssString(wgtBorder[2],true) + ' ' + toCssString(wgtBorder[3],true);
+      iMrgT = iMrgR = iMrgB = iMrgL = 0;
+      sMargin = toCssString(wgtMargin[0],false) + ' ' + toCssString(wgtMargin[1],false) + ' ' + toCssString(wgtMargin[2],false) + ' ' + toCssString(wgtMargin[3],false);
     }
     else {
       iPadT = percentPx(parentWd, wgtPadding[0]); // top
@@ -6931,7 +7592,7 @@ class TWidget_ {
       sMargin = iMrgT + 'px ' + iMrgR + 'px ' + iMrgB + 'px ' + iMrgL + 'px';
     }
     
-    var currWdgt = this.widget, gui = this.$gui;
+    var currWdgt = this.widget, gui = this.$gui, ownerObj = null;
     var minWd = this.state.minWidth, maxWd = this.state.maxWidth;
     var minHi = this.state.minHeight, maxHi = this.state.maxHeight;
     var thisWd = this.state.width, thisHi = this.state.height;
@@ -6941,11 +7602,13 @@ class TWidget_ {
     if (!wdAuto) {
       var wd = null;
       if (thisWd < 0) { // negative percent
-        var ownerWdgt = currWdgt && currWdgt.parent, ownerObj = ownerWdgt && ownerWdgt.component;
+        var ownerWdgt = currWdgt && currWdgt.parent;
+        ownerObj = ownerWdgt && ownerWdgt.component;
         if (ownerObj) {
           var iSpared = ownerObj.$gui.sparedX;
           if (typeof iSpared == 'number') wd = iSpared * (0 - thisWd);
         }
+        else ownerObj = undefined;
       }
       else wd = percentPx(parentWd,thisWd);
       
@@ -6954,6 +7617,7 @@ class TWidget_ {
       else {
         if (minWd && wd < minWd) wd = minWd;
         if (maxWd && wd > maxWd) wd = maxWd;
+        // cssWd = wd;
         cssWd = wd - iPadL - iPadR - iBrdL - iBrdR;
         if (cssWd < 0)
           cssWd = null; // wdChanged = false
@@ -6964,11 +7628,15 @@ class TWidget_ {
     if (!hiAuto) {
       var hi = null;
       if (thisHi < 0) { // negative percent
-        var ownerWdgt = currWdgt && currWdgt.parent, ownerObj = ownerWdgt && ownerWdgt.component;
+        if (ownerObj === null) {
+          var ownerWdgt = currWdgt && currWdgt.parent;
+          ownerObj = ownerWdgt && ownerWdgt.component;
+        }
         if (ownerObj) {
           var iSpared = ownerObj.$gui.sparedY;
           if (typeof iSpared == 'number') hi = iSpared * (0 - thisHi);
         }
+        else ownerObj = undefined;
       }
       else hi = percentPx(parentHi,thisHi);
       if (typeof hi != 'number')
@@ -6976,6 +7644,7 @@ class TWidget_ {
       else {
         if (minHi && hi < minHi) hi = minHi;
         if (maxHi && hi > maxHi) hi = maxHi;
+        // cssHi = hi;
         cssHi = hi - iPadT - iPadB - iBrdT - iBrdB;
         if (cssHi < 0)
           cssHi = null; // hiChanged = false
@@ -7025,10 +7694,12 @@ class TWidget_ {
     else dStyle.left = iLeft + 'px';
     if (typeof iTop != 'number') delete dStyle.top;
     else dStyle.top = iTop + 'px';
+    
     if (wdAuto) delete dStyle.width;      // as 'auto'
-    else dStyle.width = cssWd + 'px';
+    else dStyle.width = (cssWd + iPadL + iPadR + iBrdL + iBrdR) + 'px'; // box-sizing:border-box
     if (hiAuto) delete dStyle.height;
-    else dStyle.height = cssHi + 'px';
+    else dStyle.height = (cssHi + iPadT + iPadB + iBrdT + iBrdB) + 'px';
+    
     if (minWd) dStyle.minWidth = minWd + 'px';
     else delete dStyle.minWidth;
     if (maxWd) dStyle.maxWidth = maxWd + 'px';
@@ -7058,6 +7729,70 @@ class TWidget_ {
 
 T.Widget_ = TWidget_;
 
+function nodesDualFn_(value,oldValue) {
+  if (!Array.isArray(value)) return;  // fatal error
+  this.state.nodes = value;
+  resetNodes(this,value,oldValue);    // old value must be array
+  
+  function resetNodes(comp,value,oldValue) {
+    // step 1: try load json-x, direct change `value`
+    var bNewKey = [], bNewEle = [];
+    for (var i=value.length-1; i >= 0; i--) {
+      var item = value[i];
+      if (!Array.isArray(item)) continue;
+      var sKey = item[0], ele = item[1];
+      if (!sKey || typeof sKey != 'string' || !ele) {
+        value.splice(i,1);  // direct change `value`
+        continue;
+      }
+      
+      if (typeof ele == 'string') {
+        ele = item[1] = React.createElement(P__,{key:sKey,'keyid.':sKey,'html.':ele});
+        bNewKey.unshift(sKey);
+        bNewEle.unshift(ele);
+      }
+      else if (React.isValidElement(ele)) {
+        if (ele.props['keyid.'] !== sKey)
+          ele = item[1] = React.cloneElement(ele,{key:sKey,'keyid.':sKey});
+        bNewKey.unshift(sKey);
+        bNewEle.unshift(ele);
+      }
+      else {
+        if (Array.isArray(ele) && ele[0]) {  // not static node
+          ele = utils.loadElement(ele);
+          if (ele) {
+            if (ele.props['keyid.'] !== sKey)
+              ele = React.cloneElement(ele,{key:sKey,'keyid.':sKey});
+            item[1] = ele;
+            bNewKey.unshift(sKey);
+            bNewEle.unshift(ele);
+            continue;  // success
+          }
+        }
+        value.splice(i,1);
+      }
+    }
+    
+    if (W.__design__) return;  // avoid calling setChild() when in __design__
+    
+    // step 2: scan remove items
+    var bArg = [];
+    for (var i=oldValue.length-1; i >= 0; i--) { // oldValue must be array
+      var item = oldValue[i], sKey = item[0];
+      if (bNewKey.indexOf(sKey) < 0)
+        bArg.unshift('-' + sKey);
+    }
+    
+    // step 3: apply remove and set
+    bArg = bArg.concat(bNewEle);
+    if (bArg.length) {
+      setTimeout( function() {
+        comp.setChild.apply(comp,bArg);
+      },0);
+    }
+  }
+}
+
 class TBodyPanel_ extends TWidget_ {
   constructor(name,desc) {
     super(name || 'BodyPanel',desc);
@@ -7065,6 +7800,7 @@ class TBodyPanel_ extends TWidget_ {
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
+    dProp.className = 'rewgt-unit';
     dProp['keyid.'] = 'body';
     return dProp;
   }
@@ -7075,8 +7811,38 @@ class TBodyPanel_ extends TWidget_ {
     this.defineDual('innerSize', function(value,oldValue) {
       throw new Error('duals.innerSize is readonly');
     },[dState.parentWidth,dState.parentHeight]);
+    this.defineDual('nodes',nodesDualFn_,[]);
     
     return dState;
+  }
+  
+  renewPages() {
+    if (W.__design__ || !this.isHooked || !utils.pageCtrl) return;
+    
+    var comps = this.$gui.comps, wdgt = this.widget, bNew = [];
+    comps.forEach( function(child) {
+      if (!child || !child.props['isScenePage.'] || child.props.noShow) return;
+      var sKey = getElementKey_(child), comp = sKey && wdgt[sKey];
+      comp = comp && comp.component;
+      if (comp) bNew.push([sKey,comp]);  // sKey maybe 'number'
+    });
+    
+    var beRenew = false, oldKeys = utils.pageCtrl.keys; // pageCtrl.keys must defined
+    if (oldKeys.length != bNew.length)
+      beRenew = true;
+    else {
+      for (var i=0,item; item=oldKeys[i]; i++) {
+        if (item !== bNew[i][0]) {
+          beRenew = true;
+          break;
+        }
+      }
+    }
+    if (beRenew) {
+      setTimeout( function() {
+        utils.pageCtrl.renewPages(bNew);
+      },0);
+    }
   }
   
   componentDidMount() {
@@ -7132,6 +7898,7 @@ class TPanel_ extends TWidget_ {
       if ((this.props.left || 0) > 0 || (this.props.top || 0) > 0)
         this.duals.style = Object.assign({},this.props.style,{position:'absolute'});
     }
+    this.defineDual('nodes',nodesDualFn_,[]);
     return dState;
   }
   
@@ -7185,7 +7952,7 @@ class TSplitDiv_ extends TUnit_ {
     super(name || 'SplitDiv',desc);
     this._defaultProp.width = 4;
     this._defaultProp.height = 4;
-    // _statedProp, _slientProp, _defaultProp no change
+    // _statedProp, _silentProp, _defaultProp no change
   }
   
   getDefaultProps() {
@@ -7506,6 +8273,7 @@ class TGridPanel_ extends TPanel_ {
         gui.respared = true; // re-caculate spared space in prepareState()
     });
     
+    dState.sizes = null;
     this.defineDual('sizes', function(value,oldValue) {
       if (Array.isArray(value)) {
         value = this.state.sizes = value.slice(0);
@@ -7572,7 +8340,7 @@ class TGridPanel_ extends TPanel_ {
           this.reRender();
         }
       }
-    },null);  // auto assign null if no props.sizes
+    });
     
     this.defineDual('childNumId', function(value,oldValue) {
       var bColumn = this.state.sizes, useSizes = Array.isArray(bColumn);
@@ -7741,21 +8509,15 @@ T.GridPanel  = new TGridPanel_();
 class TTableRow_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'TableRow',desc);
-    this._slientProp.push('isTableRow.');  // _statedProp no change
+    this._silentProp.push('isTableRow.');  // _statedProp no change
     this._defaultProp.height = undefined;  // undefined stand for not a number, not save all none-number // careful: NaN === NaN is false
-  }
-  
-  _getSchema(self,iLevel) {
-    iLevel = iLevel || 1200;
-    return super._getSchema(self,iLevel + 200);
   }
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
     // dProp['childInline.'] = false;  // default is false
-    dProp['tagName.'] = 'tr';
     dProp['isTableRow.'] = true;       // only TableRow is allowed under TablePanel
-    dProp.className = 'rewgt-unit';
+    // dProp.className = 'rewgt-unit'; // default is 'rewgt-unit'
     dProp.height = null; // auto height, row width is fixed to 100%
     return dProp;
   }
@@ -7937,8 +8699,6 @@ class TTablePanel_ extends TPanel_ {
         var bList = childElements_(child,thisWdgt);
         
         bList.forEach( function(item) {
-          if (item.props['tagName.'] == 'noscript') return;
-          
           var iRowSpan = bLast[iPos] || 0;
           while (iRowSpan >= 2) {   // has previous row's rowspan (already take colspan as single)
             bLast[iPos++] = iRowSpan - 1;
@@ -7990,9 +8750,10 @@ T.TablePanel  = new TTablePanel_();
 class TDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'Div',desc);
-    this._slientProp.push('tagName.');  // _statedProp no change
+    this._silentProp.push('tagName.');  // _statedProp no change
     this._defaultProp.height = undefined;
     this._defaultProp.minHeight = 20;
+    this._htmlText = true;
   }
   
   getDefaultProps() {
@@ -8009,18 +8770,10 @@ class TDiv_ extends TUnit_ {
   getInitialState() {
     var dState = super.getInitialState();
     
-    var self = this;
+    dState['html.'] = null;
     this.defineDual('html.', function(value,oldValue) {
-      self.state['html.'] = value || null;
-    },null);
-    
-    if (W.__debug__) {
-      var owner = this.widget;
-      owner = owner && owner.parent;
-      owner = owner && owner.component;
-      if (owner && !hasClass_(owner.props.className,['rewgt-panel','rewgt-unit']) && !owner.props['isScenePage.'])
-        utils.instantShow('warning: ' + this._._className + ' should be used in panel widget or ScenePage');
-    }
+      this.state['html.'] = value || null;
+    });
     
     return dState;
   }
@@ -8037,6 +8790,30 @@ class TDiv_ extends TUnit_ {
 
 T.Div_ = TDiv_;
 T.Div  = new TDiv_();
+
+class THiddenDiv_ extends TDiv_ {
+  constructor(name,desc) {
+    super(name || 'HiddenDiv',desc);
+    this._defaultProp.width = undefined;
+    delete this._defaultProp.minHeight;
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    props.width = null;
+    delete props.minHeight;
+    return props;
+  }
+  
+  getInitialState() {
+    var dState = super.getInitialState();
+    this.hideThis = true;
+    return dState;
+  }
+}
+
+T.HiddenDiv_ = THiddenDiv_;
+T.HiddenDiv  = new THiddenDiv_();
 
 class TArticle_ extends TDiv_ {
   constructor(name,desc) {
@@ -8148,10 +8925,11 @@ var TPara_margin_ = [6, 0, 6, 0];
 class TP_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'P',desc);
-    this._slientProp.push('tagName.');  // _statedProp no change
+    this._silentProp.push('tagName.');  // _statedProp no change
     this._defaultProp.width = undefined;
     this._defaultProp.height = undefined;
     this._defaultProp.margin = TPara_margin_.slice(0);
+    this._htmlText = true;
   }
   
   getDefaultProps() {
@@ -8168,10 +8946,10 @@ class TP_ extends TUnit_ {
   getInitialState() {
     var dState = super.getInitialState();
     
-    var self = this;
+    dState['html.'] = null;
     this.defineDual('html.', function(value,oldValue) {
-      self.state['html.'] = value || null;
-    },null);
+      this.state['html.'] = value || null;
+    });
     
     return dState;
   }
@@ -8188,10 +8966,12 @@ class TP_ extends TUnit_ {
 
 T.P_ = TP_;
 T.P  = new TP_();
+var P__ = React.createClass(T.P._extend());
 
 class TNoscript_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Noscript',desc);
+    delete this._defaultProp.margin;
   }
   
   getDefaultProps() {
@@ -8204,7 +8984,7 @@ class TNoscript_ extends TP_ {
   
   render() {
     syncProps_(this);  // should call syncProps since duals.attr in using
-    return null;       // fixed render as <noscript/>
+    return React.createElement(this.props['tagName.']); // ignore props and children
   }
 }
 
@@ -8253,7 +9033,7 @@ var TUl_padding_ = [0, 0, 0, 20];
 class TUl_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Ul',desc);
-    this._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _slientProp no change
+    this._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _silentProp no change
   }
   
   getDefaultProps() {
@@ -8270,7 +9050,7 @@ T.Ul  = new TUl_();
 class TOl_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Ol',desc);
-    this._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _slientProp no change
+    this._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _silentProp no change
   }
   
   getDefaultProps() {
@@ -8440,6 +9220,7 @@ class TIframe_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Iframe',desc);
     this._defaultProp.margin = TIframe_margin_.slice(0);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -8452,36 +9233,6 @@ class TIframe_ extends TP_ {
 
 T.Iframe_ = TIframe_;
 T.Iframe  = new TIframe_();
-
-class TVideo_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Video',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'video';
-    return props;
-  }
-}
-
-T.Video_ = TVideo_;
-T.Video  = new TVideo_();
-
-class TCanvas_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Canvas',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'canvas';
-    return props;
-  }
-}
-
-T.Canvas_ = TCanvas_;
-T.Canvas  = new TCanvas_();
 
 var TBlockquote_padding_ = [0,30,0,30];
 
@@ -8505,6 +9256,7 @@ T.Blockquote  = new TBlockquote_();
 class TTable_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Table',desc);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -8583,6 +9335,7 @@ class TTbody_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Tbody',desc);
     this._defaultProp.margin = TBody_margin_.slice(0);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -8602,7 +9355,7 @@ class TTbody_ extends TP_ {
       bChild.push(tailRow);
       
       var props = setupRenderProp_(this);
-      return React.createElement(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
+      return React.createElement(this.props['tagName.'],props,bChild);
     }
     else return super.render();
   }
@@ -8647,6 +9400,7 @@ class TTh_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Th',desc);
     this._defaultProp.margin = ThTr_margin_.slice(0);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -8664,6 +9418,7 @@ class TTr_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Tr',desc);
     this._defaultProp.margin = ThTr_margin_.slice(0);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -8789,6 +9544,7 @@ class THr_ extends TP_ {
     super(name || 'Hr',desc);
     this._defaultProp.width = 0.9999;
     this._defaultProp.borderWidth = THr_border_width_.slice(0);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -8828,8 +9584,9 @@ class TSpan_ extends TWidget_ {
     super(name || 'Span',desc);
     
     this._statedProp = [];
-    this._slientProp = ['className','hookTo.','keyid.','childInline.','tagName.'];
+    this._silentProp = ['className','hookTo.','keyid.','childInline.','tagName.'];
     this._defaultProp = {width:undefined, height:undefined}; // 'html.' default is not passed, suggest not use width/height, but if used also OK
+    this._htmlText = true;  // use 'html.'
   }
   
   _getSchema(self,iLevel) {
@@ -8923,9 +9680,14 @@ class TSpan_ extends TWidget_ {
               }
             }
             else {
-              if (item != 'key')
+              if (item == 'children') {
+                if (this.props.hasOwnProperty('for.index')) { // $children only used under forExpr
+                  gui.isChildExpr = true;
+                  gui.children2 = this.props.children;
+                }
+              }
+              else if (item != 'key') // use $key, $children as normal prop, updated in parent for-loop
                 exprAttrs.push(item);
-              // else, take '$key' as normal prop
             }
             continue;
           }
@@ -8971,7 +9733,9 @@ class TSpan_ extends TWidget_ {
     Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
     if (W.__design__) gui.className = addClass_(gui.className,'rewgt-inline'); // gui.className is fixed, not changed by prop.className
     var dStyle = Object.assign({},this.props.style);
-    var dState = { id__:0, childNumId:0, duals:[], exprAttrs:exprAttrs.slice(0) }; // state.duals = [[attr,newValue], ...]
+    var dState = { id__:0, childNumId:0, duals:[], exprAttrs:exprAttrs.slice(0),
+      klass:'', style:{}, 'html.':null,
+    }; // state.duals = [[attr,newValue], ...]
     if (W.__design__) {
       var d = template._getGroupOpt(this);
       dState['data-group.opt'] = d.type + '/' + d.editable; // no props['data-group.opt'], not in $gui.dataset
@@ -9009,20 +9773,20 @@ class TSpan_ extends TWidget_ {
     
     this.defineDual('klass', function(value,oldValue) {
       this.state.klass = value || '';
-    },'');
+    });
     this.defineDual('style', function(value,oldValue) {
       this.state.style = Object.assign({},oldValue,value);
-    },{});
+    });
     this.defineDual('html.', function(value,oldValue) {
       this.state['html.'] = value || null;
-    },null);
+    });
     this.defineDual('id__', function(value,oldValue) {
       this.state.id__ = value;   // is first render when oldValue == 0
       gui.id__ = gui.id2__ = value;
     });
     if (dualIdSetter) this.defineDual('id__',dualIdSetter);
     
-    this.defineDual('trigger',triggerExprFn_(this));
+    this.defineDual('trigger',triggerExprFn_);
     
     var hookThis = this.widget;
     if (owner && hookThis) {
@@ -9046,8 +9810,14 @@ class TSpan_ extends TWidget_ {
       
       var compIdx = gui.compIdx, bComp = gui.comps;
       bComp.forEach( function(child,iPos) {
-        if (typeof child == 'string')
+        if (typeof child == 'string') {
+          if (iPos == 0 && bComp.length == 1 && thisObj.duals.hasOwnProperty('html.')) {
+            thisObj.state['html.'] = child;
+            bComp[iPos] = undefined;
+            return;
+          }
           child = bComp[iPos] = React.createElement(Span__,{'html.':child}); // auto change to React Element
+        }
         else if (!child) return;
         
         var keyid, sKey = getElementKey_(child), isOld = false;
@@ -9093,7 +9863,7 @@ class TSpan_ extends TWidget_ {
         else { // is pure react element
           compIdx[keyid] = iPos;
           if (!isOld)
-            bComp[iPos] = React.cloneElement(child,{'keyid.':keyid,key:sKey});
+            bComp[iPos] = React.cloneElement(child,{key:sKey}); // not pass 'keyid.'
           return;
         }
         
@@ -9149,9 +9919,25 @@ T.Span_ = TSpan_;
 T.Span  = new TSpan_();
 var Span__ = React.createClass(T.Span._extend());
 
+class THiddenSpan_ extends TSpan_ {
+  constructor(name,desc) {
+    super(name || 'HiddenSpan',desc);
+  }
+  
+  getInitialState() {
+    var dState = super.getInitialState();
+    this.hideThis = true;
+    return dState;
+  }
+}
+
+T.HiddenSpan_ = THiddenSpan_;
+T.HiddenSpan  = new THiddenSpan_();
+
 class TBr_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'Br',desc);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -9412,6 +10198,7 @@ T.Progress  = new TProgress_();
 class TImg_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'Img',desc);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -9432,6 +10219,36 @@ class TImg_ extends TSpan_ {
 
 T.Img_ = TImg_;
 T.Img  = new TImg_();
+
+class TVideo_ extends TSpan_ {
+  constructor(name,desc) {
+    super(name || 'Video',desc);
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    props['tagName.'] = 'video';
+    return props;
+  }
+}
+
+T.Video_ = TVideo_;
+T.Video  = new TVideo_();
+
+class TCanvas_ extends TSpan_ {
+  constructor(name,desc) {
+    super(name || 'Canvas',desc);
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    props['tagName.'] = 'canvas';
+    return props;
+  }
+}
+
+T.Canvas_ = TCanvas_;
+T.Canvas  = new TCanvas_();
 
 class TPicture_ extends TSpan_ {
   constructor(name,desc) {
@@ -9511,6 +10328,7 @@ T.Output  = new TOutput_();
 class TInput_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'Input',desc);
+    this._htmlText = false;
   }
   
   _getSchema(self,iLevel) {
@@ -9651,69 +10469,6 @@ class TSelect_ extends TSpan_ {
     var props = super.getDefaultProps();
     props['tagName.'] = 'select';
     return props;
-  }
-  
-  syncSelected(thisNode) {
-    if (!thisNode)
-      thisNode = ReactDOM.findDOMNode(this);
-    if (!thisNode) return;
-    
-    var bComp_ = this.$gui.comps, owner = this.widget;
-    if (owner) {
-      var selects = [], opts = thisNode.options;
-      for (var i=0,item; item = opts[i]; i++) {
-        selects.push(item.selected);
-      }
-      
-      var bComp = [];
-      bComp_.forEach( function(child) {
-        var sName = child.props['tagName.'];
-        if (sName == 'option') {
-          var sKey = getElementKey_(child);
-          if (sKey) bComp.push([sKey,child]);
-        }
-        else if (sName == 'optgroup') {
-          var sKey = getElementKey_(child);
-          if (!sKey) return;
-          var bChild = childElements_(child,owner), sPrefix = sKey + '.';
-          bChild.forEach( function(child2) {
-            if (child2.props['tagName.'] == 'option') {
-              var sKey2 = getElementKey_(child2);
-              if (sKey2)
-                bComp.push([sPrefix+sKey2,child2]);
-            }
-          });
-        }
-      });
-      
-      bComp.forEach( function(bChild,idx) { // we not use 'event.target.selectedIndex' since we scan all <option>
-        var sSeg = bChild[0], child = bChild[1];
-        var childObj = owner.W(sSeg);
-        childObj = childObj && childObj.component;
-        if (childObj) {
-          var selected = selects[idx], checked = childObj.state['data-checked'];
-          if (typeof checked == 'string') {
-            if (!selected && checked) {
-              if (childObj.duals.hasOwnProperty('data-checked'))
-                childObj.duals['data-checked'] = '';
-            }
-            else if (selected && !checked) {
-              if (childObj.setChecked)
-                childObj.setChecked(null);  // callback=null, force=false
-              else {
-                if (childObj.duals.hasOwnProperty('data-checked'))
-                  childObj.duals['data-checked'] = '1';
-              }
-            }
-          }
-        }
-      });
-    }
-  }
-  
-  $$onChange(event) {
-    this.syncSelected(event.target);  // watch all <option>, checked to unchecked
-    if (this.$onChange) this.$onChange(event);
   }
 }
 
@@ -10162,11 +10917,53 @@ T.Rt  = new TRt_();
 
 // NavXXX, GroundXXX, OptXXX, RefXXX
 //-----------------------------------
+function navSetChecked_(comp,checkedId,callback) {
+  if (checkedId) {
+    var gui = comp.$gui, navKey = gui.navSubkey;
+    var oldId = comp.state.checkedId;
+    if (gui.navItems[checkedId]) { // is valid checkedId
+      if (!disableSwitch(oldId,checkedId)) {
+        comp.state.checkedId = checkedId;  // set immediately
+        comp.reRender(callback);   // auto choose checkedId GroundXX to render out
+        return;
+      }
+    }
+    else if (navKey) {
+      var widget = comp.widget, subNav = widget && widget[navKey];
+      subNav = subNav && subNav.component;
+      if (subNav && subNav.props['isNavigator.'] && !disableSwitch(oldId,checkedId)) {
+        comp.state.checkedId = checkedId; // set immediately, this level is OK whereas sub level may failed
+        subNav.fireChecked(checkedId,callback);
+        return;
+      }
+    }
+    
+    // set checkedId even if switch ground failed
+    comp.state.checkedId = checkedId; // set immediately
+  }
+  
+  if (callback) callback(); // failed
+  
+  function disableSwitch(oldId,checkedId) {  // checkedId not used yet
+    if (oldId || oldId === 0) {
+      var child = comp.widget;
+      child = child && child[oldId];
+      child = child && child.component;
+      
+      if (child && child.navWillLeave) { // GroundXX.navWillLeave defined
+        var info = child.navWillLeave();
+        if (!info || typeof info == 'string' && !window.confirm(info))
+          return true; // navWillLeave() return false, or confirm(sMsg) denied
+      }
+    }
+    return false;
+  }
+}
 
 class TNavPanel_ extends TPanel_ {
   constructor(name,desc) {
     super(name || 'NavPanel',desc);
-    this._slientProp.push('isNavigator.');
+    this._silentProp.push('isNavigator.');
   }
   
   getDefaultProps() {
@@ -10177,36 +10974,63 @@ class TNavPanel_ extends TPanel_ {
   
   getInitialState() {
     var dState = super.getInitialState();
+    dState.checkedId = '';
     
     var gui = this.$gui;
-    gui.navHead = [];
     gui.navItems = {};
-    gui.inFiring = false;
+    gui.navOrder = [];
+    gui.navSubkey = undefined;  // sub NavXX
     
-    if (gui.forExpr) {
-      console.log("error: can not use '$for' in NavPanel or NavDiv");
-      gui.forExpr = false;
-      var iPos = gui.exprAttrs.indexOf('for');
-      if (iPos >= 0) gui.exprAttrs.splice(iPos,1);
-    }
-    
-    dState.checkedId = ''; // default check nothing, otherwize playground node maybe not ready
     if (this.widget && this.widget === topmostWidget_)
       utils.instantShow('error: NavPanel/NavDiv can not be used at topmost.');
     
     gui.updateNavItems = function() {
       var bComp = gui.comps, iLen = bComp.length;
-      gui.navHead = [];
-      gui.navItems = {};
+      gui.navSubkey = undefined;
+      if (W.__design__)
+        gui.navItems = {};
+      // else, not W.__design__, GroundXX should not be online removed by setChild()
+      
+      var bExist = [];
       for (var i = 0; i < iLen; i++) {
         var child = bComp[i];
         if (child) {
+          var iTmp, sKey = getElementKey_(child);
+          if (!sKey) continue;
+          
+          if (child.props['isNavigator.']) gui.navSubkey = sKey;
+          if ((parseInt(sKey)+'') === sKey) continue;
+          
           if (child.props['isPlayground.']) {
-            var sKey = getElementKey_(child);
-            if (sKey) gui.navItems[sKey] = child;
+            gui.navItems[sKey] = child;
+            bExist.push([sKey,true]);
           }
-          else gui.navHead.push(child);
+          else bExist.push([sKey,false]);
         }
+      }
+      
+      // remove no-using none-ground in gui.navOrder, and merge existing ground to bExist
+      var iLastPos = bExist.length;
+      for (var i=gui.navOrder.length-1; i >= 0; i--) {
+        var item = gui.navOrder[i];
+        if (item[1]) {  // is GroundXX
+          if (findExistKey(item[0]) < 0)  // merge to bExist
+            bExist.splice(iLastPos,0,item);
+          // else, ignore
+        }
+        else {
+          var iTmp = findExistKey(item[0]);
+          if (iTmp < 0)  // the item removed just now
+            gui.navOrder.splice(i,1);
+          else iLastPos = iTmp;
+        }
+      }
+      gui.navOrder = bExist;
+      
+      function findExistKey(sKey) {
+        return bExist.findIndex( function(item) {
+          return item[0] === sKey;
+        });
       }
     };
     
@@ -10217,85 +11041,61 @@ class TNavPanel_ extends TPanel_ {
     return dState;
   }
   
-  setChecked(checkedId, callback) {
-    if (checkedId && this.$gui.navItems[checkedId]) { // is valid checkedId
-      var oldId = this.state.checkedId;
-      if (oldId || oldId === 0) {
-        var child = this.widget;
-        child = child && child[oldId];
-        child = child && child.component;
-        
-        if (child && child.navWillLeave) {
-          var info = child.navWillLeave();
-          if (!info || typeof info == 'string' && !window.confirm(info)) {
-            if (callback) callback(); // ignored
-            return; // navWillLeave() return false, or confirm(sMsg) denied
-          } // else, continue set changing
-        }
-      }
-      
-      this.setState({checkedId:checkedId},callback);
-      return;
-    }
-    
-    if (callback) callback(); // failed
-  }
-  
-  getChecked() {
-    return this.state.checkedId;
-  }
-  
-  fireChecked(keyid, callback) {
+  listOptComp(withKey) {
+    var ret = [];
     var widget = this.widget;
-    if ((keyid || keyid === 0) && widget) {
-      if (keyid == this.state.checkedId) { // checkedId not changed
-        if (callback) callback();
-        return;
+    if (!widget) return ret;
+    
+    var comps = this.$gui.comps, iLen = comps.length;
+    for (var i=0; i < iLen; i++) {
+      var child = comps[i];
+      if (child && !child.props['isPlayground.']) {
+        var sKey = getElementKey_(child), wdgt = sKey && widget[sKey];
+        if (wdgt && scanOneLevel(wdgt)) return ret;
       }
-      
-      var childObj = findOptNode(widget, keyid);
+    }
+    return ret;
+    
+    function scanOneLevel(wdgt) {
+      var ownerObj = wdgt.component;
+      if (ownerObj) {
+        if (ownerObj.props['isOption.']) {
+          ret.push(ownerObj);
+          if (withKey && withKey === ownerObj.$gui.keyid)
+            return true; // quit
+        }
+        else if (ownerObj.props['isNavigator.'])
+          return false;  // quit, not scan sub level of NavXX
+        else {
+          var comps = ownerObj.$gui.comps, iLen = comps.length;
+          for (var i=0; i < iLen; i++) {
+            var child = comps[i];
+            if (child) {
+              var sKey = getElementKey_(child), childWdgt = sKey && wdgt[sKey];
+              if (childWdgt && scanOneLevel(childWdgt))
+                return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+  }
+  
+  fireChecked(sKeyid, callback) {  // sKeyid should be string
+    if (this.isHooked && sKeyid && sKeyid !== this.state.checkedId) {
+      sKeyid = sKeyid + '';
+      var b = this.listOptComp(sKeyid), childObj = b[0];
       if (childObj && childObj.setChecked) {
-        var gui = this.$gui;
-        gui.inFiring = true;      // avoid default 'data-checked' change again
-        setTimeout( function() {
-          gui.inFiring = false;
-        },300);
-        
-        childObj.setChecked(callback);
+        childObj.setChecked(callback); // auto set this.state.checkedId
+        return;
+      }
+      else if (!childObj) {  // no OptXX defined, try show GroundXX directly
+        navSetChecked_(this,sKeyid,callback);
         return;
       }
     }
-    
     if (callback) callback();
-    
-    function findOptNode(owner, keyid) {
-      var ownerObj = owner.component;
-      if (!ownerObj) return null;
-      
-      var b = [];
-      ownerObj.$gui.comps.forEach(function(child) {
-        if (child) { var sKey = getElementKey_(child); if (sKey) b.push(sKey); }
-      });
-      
-      var iLen = b.length;
-      for (var i = 0; i < iLen; i++) {
-        var sKey = b[i], child = owner[sKey];
-        if (!child) continue;
-        
-        var childObj = child && child.W && child.component;
-        if (!childObj) continue;
-        
-        if (childObj.props['isOption.']) {
-          if (keyid == sKey) return childObj;
-        }
-        else if (!childObj.props['isPlayground.']) {
-          var ret = findOptNode(child, keyid); // search deep first
-          if (ret) return ret;
-        }
-      }
-      
-      return null;
-    }
   }
   
   prepareState() {
@@ -10317,43 +11117,68 @@ class TNavPanel_ extends TPanel_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
-    var bChild = this.prepareState();
+    var bChild = this.prepareState(); // bChild is copy of gui.comps
     
-    var gui = this.$gui, bChild2 = gui.navHead.slice(0);
-    var checkedId = this.state.checkedId;
-    
-    if (W.__design__) { // if in design, try show all (display:none for none-active playground)
-      var bComp = gui.comps, iLen = bComp.length, bChild3 = [];
-      for (var i = 0; i < iLen; i++) {
-        var child = bComp[i];
-        if (child && child.props['isPlayground.']) {
-          bChild2.push(child);  // added in order
-          bChild3.push(child);
+    if (W.__design__) {  // 'display:none' for none-active playground
+      var wdgt = this.widget;
+      if (wdgt) {
+        setTimeout( function() {
+          bChild.forEach( function(child) {
+            var sKey = child && getElementKey_(child);
+            var obj = sKey && wdgt[sKey];
+            obj = obj && obj.component;
+            if (obj) obj.reRender();  // re-render since 'display:none' not driven by attr-changing
+          });
+        },0);
+      }
+    }
+    else {  // not includes none-active playground to render
+      var checkedId = this.state.checkedId + '', idx = bChild.length-1, found = false;
+      while (idx >= 0) {
+        var child = bChild[idx];
+        if (child.props['isPlayground.']) {
+          if (checkedId && checkedId == getElementKey_(child))
+            found = true;
+          else bChild.splice(idx,1);
         }
+        idx -= 1;
       }
       
-      var self = this;
-      setTimeout( function() {
-        var wdgt = self.widget;
-        if (!wdgt) return;
-        
-        bChild3.forEach( function(child) {
-          var sKey = child && getElementKey_(child);
-          var obj = sKey && wdgt[sKey];
-          obj = obj && obj.component;
-          if (obj) obj.reRender();  // refresh every child
-        });
-      },0);
-    }
-    else {
-      if (checkedId || checkedId === 0) {
-        var child = gui.navItems[checkedId];
-        if (child) bChild2.push(child);
+      if (!found && checkedId) { // checkedId should be string
+        var gui = this.$gui, child = gui.navItems[checkedId];
+        if (child) {  // then, prepare GroundXX in order
+          var iPos = gui.navOrder.findIndex(function(item){ return item[0] === checkedId; });
+          if (iPos < 0)
+            bChild.push(child);
+          else {
+            var bNear = gui.navOrder.slice(iPos+1), iFrom = 0;
+            var iTarg, iPos2, succ = false;
+            while ((iTarg = bNear.findIndex(function(item,idx){ return idx >= iFrom && !item[1]; })) >= 0) {
+              iPos2 = findInsPos(bChild,bNear[iTarg][0]); // bNear[iTarg][0] is none-ground sKeyid
+              if (iPos2 >= 0) {
+                succ = true;
+                break;
+              }
+              iFrom = iTarg;
+            }
+            
+            if (!succ)
+              bChild.push(child);
+            else bChild.splice(iPos2,0,child);
+          }
+        }
       }
     }
     
     var props = setupRenderProp_(this);
-    return React.createElement('div', props, bChild2);
+    return React.createElement('div',props,bChild);
+    
+    function findInsPos(bChild,sKey) {
+      for (var i=0,child; child=bChild[i]; i++) {
+        if (sKey == getElementKey_(child)) return i;
+      }
+      return -1;
+    }
   }
 }
 
@@ -10363,7 +11188,8 @@ T.NavPanel  = new TNavPanel_();
 class TNavDiv_ extends TNavPanel_ {
   constructor(name,desc) {
     super(name || 'NavDiv',desc);
-    this._slientProp.push('isNavigator.');
+    // this._silentProp.push('isNavigator.');
+    this._silentProp.push('tagName.');
     this._defaultProp.height = undefined;
     this._defaultProp.minHeight = 20;
   }
@@ -10390,30 +11216,30 @@ function designRenderGround(obj,iGroundId) {
   owner = owner && owner.parent;
   var inNav = false, checkedId = undefined, ownerObj = owner && owner.component;
   if (ownerObj && ownerObj.props['isNavigator.']) {
-    checkedId = ownerObj.state.checkedId;
+    checkedId = ownerObj.state.checkedId || '';
     inNav = true;
   }
   
   var bChild = obj.prepareState();
   var dStyle = Object.assign({},obj.state.style);
   if (inNav) {
-    if ((checkedId || checkedId === 0) && checkedId == obj.$gui.keyid) // show it
+    if (checkedId && checkedId == obj.$gui.keyid) // show it
       dStyle.display = 'block';
     else dStyle.display = 'none';  // hide it
   }
-  else dStyle.display = 'block';
+  // else, keep dStyle.display no changing
   
   if (!bChild.length && iGroundId == 2)
     bChild = obj.state['html.'] || null;
   
   var props = setupRenderProp_(obj,dStyle);
-  return React.createElement('div', props, bChild);
+  return React.createElement('div',props,bChild);
 }
 
 class TGroundPanel_ extends TPanel_ {
   constructor(name,desc) {
     super(name || 'GroundPanel',desc);
-    this._slientProp.push('isPlayground.');
+    this._silentProp.push('isPlayground.');
     this._defaultProp.height = undefined;
     this._defaultProp.minHeight = 20;
   }
@@ -10440,10 +11266,10 @@ T.GroundPanel  = new TGroundPanel_();
 class TGroundDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'GroundDiv',desc);
-    this._slientProp.push('tagName.');
-    this._slientProp.push('isPlayground.');
+    this._silentProp.push('tagName.','isPlayground.');
     this._defaultProp.height = undefined;
     this._defaultProp.minHeight = 20;
+    this._htmlText = true;
   }
   
   getDefaultProps() {
@@ -10461,9 +11287,10 @@ class TGroundDiv_ extends TUnit_ {
   getInitialState() {
     var dState = super.getInitialState();
     
+    dState['html.'] = null;
     this.defineDual('html.', function(value,oldValue) {
       this.state['html.'] = value || null;
-    },null);
+    });
     
     return dState;
   }
@@ -10485,168 +11312,178 @@ class TGroundDiv_ extends TUnit_ {
 T.GroundDiv_ = TGroundDiv_;
 T.GroundDiv  = new TGroundDiv_();
 
-function setupOptTrigger_(thisObj,value,oldValue) {
-  if (typeof value != 'string') return;
-  
-  // step 1: setup AST
-  var bAst = setupExprAst(value,thisObj,'trigger');
-  
-  // step 2: scan AST and adjust
-  if (bAst) {
-    if (bAst[0] == 61) bAst = bAst[1][2]; // ignore headId // expr_items_1 : expr : expr    
-    adjustExprAst(bAst,[]);
-    
-    // step 3: prepare callspace and save bAst
-    var gui = thisObj.$gui, triggerInfo = gui.triggerInfo;
-    if (!triggerInfo) {
-      var exprSpace = {};
-      gui.triggerInfo = [exprSpace,bAst];
-      setupSpace(exprSpace);
-    }
-    else triggerInfo[1] = bAst;
-  }
-  
-  function setupSpace(space) {
-    space.ex = creator.createEx(thisObj);
-    space.Math = Math;
-    
-    function makePropsDualsFn(sName) {
-      return ( function(idxOrPath) {
-        var path_ = idxOrPath || 0, tp = typeof path_;
-        if (tp == 'number') {
-          if (path_ < 0) {       // only support 0 layer callspace
-            console.log('error: no callspace stack for ' + sName + '(' + path_ + ')');
-            return null;
-          }
-          path_ = 0;
-        }
-        else if (tp != 'string')
-          path_ = 0;
-        
-        if (path_ === 0)
-          return thisObj[sName]; // quick found
-        else {
-          var targ = getCompByPath_(thisObj,path_);
-          return (targ? targ[sName]: null);
-        }
-      });
-    }
-    space.props = makePropsDualsFn('props');
-    space.state = makePropsDualsFn('state');
-    space.duals = makePropsDualsFn('duals');
-    
-    space.typeof = function(value) {
-      return typeof value;
-    };
-  }
-}
-
-function fireOptTrigger_(thisObj) {
-  var triggerInfo = thisObj.$gui.triggerInfo;
-  if (!triggerInfo) return;
-  
-  var exprSpace = triggerInfo[0], bAst = triggerInfo[1];
-  exprSpace.$info = [thisObj,'trigger',ex.time()];
-  var bRet = evalInSpace(bAst,exprSpace);
-  // delete exprSpace.$info;   // keep for asynchrony task
-  
-  var tp = typeof bRet;
-  if (tp == 'string')
-    bRet = [bRet];
-  else if (tp == 'object') {
-    if (!Array.isArray(bRet))
-      bRet = [['',bRet]];
-  }
-  else return;  // unknown format
-  
-  var item = bRet.shift();
-  while (true) {
-    if (Array.isArray(item))
-      triggerData(item[0] || '',item[1]);    // update duals.data
-    else if (typeof item == 'string') {
-      var next, cfgData = null;
-      if (bRet.length > 0 && typeof(next=bRet[0]) == 'object' && !Array.isArray(next))
-        cfgData = bRet.shift();
-      triggerCheck(item,cfgData);
-    }
-    else break;
-    
-    item = bRet.shift();
-  }
-  
-  function triggerData(sPath,modifier) {
-    if (typeof sPath != 'string' || !modifier) return;
-    
-    var targ = sPath? getCompByPath_(thisObj,sPath): thisObj;
-    if (!targ) {
-      console.log('warning: can not find target (' + sPath + ')');
-      return;
-    }
-    if (!targ.duals.hasOwnProperty('data')) return;
-    
-    setTimeout( function() {
-      targ.duals.data = ex.update(targ.duals.data,modifier);
-    },0);
-  }
-  
-  function triggerCheck(sPath,cfgData) {
-    var dCfg = undefined;
-    if (cfgData && typeof cfgData == 'object')
-      dCfg = cfgData;
-    
-    setTimeout( function() {
-      var targ = sPath? getCompByPath_(thisObj,sPath): thisObj;
-      if (!targ) {
-        console.log('warning: can not find target (' + sPath + ')');
-        return;
-      }
-      if (targ === thisObj) {
-        console.log('warning: trigger can not fire widget itself.');
-        return;
-      }
-      
-      if (targ.props['isOption.'] && targ.setChecked)
-        targ.setChecked(null,false,dCfg);  // callback is null, isForce is false
-    },0);
-  }
-}
-
 function findNavOwner_(thisObj) {
-  var owner = thisObj.widget, ownerObj = null, findNav = false;
+  var owner = thisObj.widget;
   owner = owner && owner.parent;
   
   while (owner) {
-    ownerObj = owner.component;
+    var ownerObj = owner.component;
     if (ownerObj) {
-      if (ownerObj.props['isNavigator.']) {
-        if (ownerObj.setChecked)
-          findNav = true;
-        break;
-      }
-      else owner = owner.parent; // continue next loop
+      if (ownerObj.props['isNavigator.'])
+        return ownerObj;
+      owner = owner.parent;
     }
     else break;
   }
   
-  return findNav ? ownerObj: null;
+  return null;
+}
+
+function optPopWindow_(self,popOption,newOpt,callback) { // callback should be available function
+  if (typeof popOption.path == 'string') {
+    if (!popOption.state) popOption.state = {opened:false};
+    if (newOpt) {
+      delete newOpt.state;
+      popOption = Object.assign({},popOption,newOpt);
+    }
+    else popOption = Object.assign({},popOption);
+    
+    if (!popOption.state.opened) {
+      var sPath = popOption.path;
+      if (!sPath) sPath = './' + this.$gui.keyid;
+      var ele = self.componentOf(sPath);
+      ele = ele && ele.fullClone();
+      
+      if (!ele)
+        utils.instantShow('warning: can not locate popup window (' + sPath + ').');
+      else {
+        utils.popWin.showWindow(ele,popOption, function() {
+          self.duals['data-checked'] = '1';
+          callback(true);
+        },self);
+        return;
+      }
+    }
+  }
+  
+  callback(false);  // popup window failed
+}
+
+function trySyncUncheck_(self,ownerObj) {
+  if (!ownerObj) ownerObj = self.findNavOwner();
+  if (!ownerObj) return;
+  
+  var thisKey = self.$gui.keyid, bList = ownerObj.listOptComp();
+  bList.forEach( function(comp) {
+    if (comp !== self && comp.clearChecked && comp.$gui.keyid !== thisKey)
+      comp.clearChecked();
+  });
+}
+
+function setOptChecked_(self,callback,newOpt,isForce) {
+  var popOption = self.state.popOption;
+  if (popOption) {
+    if (!popOption.state || !popOption.state.opened) {
+      optPopWindow_(self,popOption,newOpt, function(succ) {
+        if (callback) callback();
+      });
+      return;
+    }
+    else {  // popOption.state.opened, fired by duals['data-checked'] = '1'
+      if (!isForce) return; // else, isForce, continue next process
+    }
+  }
+  
+  if (!self.state['data-checked']) {
+    self.duals['data-checked'] = '1';  // redirect to duals['data-checked'] = '1'
+    if (callback) {
+      setTimeout( function() {
+        callback();
+      },0);
+    }
+    return;
+  }
+  
+  var recheckable = self.state.recheckable;
+  if (recheckable) {
+    self.state.recheckable = false;   // avoid re-enter
+    setTimeout( function() {
+      self.state.recheckable = true;
+    },300);
+  }
+  
+  var justSet = false, ownerObj = null;
+  function doCallback() {
+    if (justSet) {
+      trySyncUncheck_(self,ownerObj);
+      self.fireTrigger();
+    }
+    if (callback) callback();
+  }
+  
+  if (self.state.isolated) {
+    if (isForce || recheckable)
+      justSet = true;
+    doCallback();
+    return;
+  }
+  
+  ownerObj = self.findNavOwner();
+  if (ownerObj) {
+    var sKeyid = self.$gui.keyid + '';
+    if (ownerObj.state.checkedId !== sKeyid || isForce || recheckable) {
+      if (!ownerObj.canNavigateTo || ownerObj.canNavigateTo(sKeyid)) {
+        if (isForce || recheckable)
+          justSet = true;
+        navSetChecked_(ownerObj,sKeyid,doCallback); // fire navigation
+        return;
+      }
+    }
+  }
+  doCallback();
+}
+
+function defineOptDual_(self,state) {
+  state.isolated = false;
+  self.defineDual('isolated', function(value,oldValue) {
+    this.state.isolated = (value === 'false' || value === '0'? false: !!value);
+  });
+  
+  state.recheckable = false;
+  self.defineDual('recheckable', function(value,oldValue) {
+    this.state.recheckable = (value === 'false' || value === '0'? false: !!value);
+  });
+  
+  self.defineDual('popOption');
+  
+  state['data-checked'] = '';
+  self.defineDual('data-checked', function(value,oldValue) {
+    var sOld = oldValue === 'false' || oldValue === '0' || !oldValue ? '' : '1';
+    var sNew = value === 'false' || value === '0' || !value ? '' : '1';
+    if (sOld != sNew) {
+      if (sNew) {
+        self.state['data-checked'] = sNew;      // avoid recusive dual-assign
+        setTimeout( function() {
+          self.setChecked(null,undefined,true); // callback=null, isForce=true
+        },0);
+      }
+      else self.state['data-checked'] = sNew;
+    }
+    else self.state['data-checked'] = sOld;     // no changing, fix value to '' or '1'
+  });
+}
+
+function addOptSchema_(dSchema,iLevel) {
+  var sBoolStr = '[string]: "" or "1"';
+  dSchema['data-checked'] = [ iLevel+1,'string',null,sBoolStr ];
+  dSchema.isolated = [ iLevel+2,'string',null,sBoolStr ];
+  dSchema.recheckable = [ iLevel+3,'string',null,sBoolStr ];
+  dSchema.trigger = [iLevel+4,'string',null,'[string]: [sPath,{trigger,pop_option},[sPath,modifier], ...]'];
+  dSchema.popOption = [iLevel+5,'object',null,'[object]: {path:bodyElePath}'];
+  return dSchema;
 }
 
 class TOptSpan_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'OptSpan',desc);
-    this._slientProp.push('isOption.');
+    this._silentProp.push('isOption.');
+    this._defaultProp['data-checked'] = '';
   }
   
   _getSchema(self,iLevel) {
     iLevel = iLevel || 1200;
     var dSchema = super._getSchema(self,iLevel + 200);
-    var sBoolStr = '[string:] 0 or 1';
-    dSchema['data-checked'] = [ iLevel+1,'string',null,sBoolStr ];
-    dSchema.isolated = [ iLevel+2,'string',null,sBoolStr ];
-    dSchema.recheckable = [ iLevel+3,'string',null,sBoolStr ];
-    dSchema.trigger = [iLevel+4,'string',null,'[string]: [sPath,{pop_option},sPath,[dual_data], ...]'];
-    dSchema.popOption = [iLevel+5,'object',null,'[object]: {path:bodyElePath}'];
-    return dSchema;
+    return addOptSchema_(dSchema,iLevel);
   }
   
   getDefaultProps() {
@@ -10658,74 +11495,8 @@ class TOptSpan_ extends TSpan_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    
-    this.defineDual('isolated', function(value,oldValue) {
-      this.state.isolated = (value === 'false' || value === '0'? false: !!value);
-    },false);
-    this.defineDual('recheckable', function(value,oldValue) {
-      this.state.recheckable = (value === 'false' || value === '0'? false: !!value);
-    },false);
-    this.defineDual('popOption');
-    this.defineDual('data-checked', function(value,oldValue) {
-      this.state['data-checked'] = (value === 'false' || value === '0' || !value? '': '1');
-    },'');
-    
-    this.undefineDual('trigger');
-    this.defineDual('trigger', function(value,oldValue) {
-      this.state.trigger = value;
-      setupOptTrigger_(this,value,oldValue);
-    });
-    
+    defineOptDual_(this,dState);
     return dState;
-  }
-  
-  componentDidMount() {
-    super.componentDidMount();
-    
-    var thisNode = ReactDOM.findDOMNode(this);
-    if (!thisNode) return;
-    
-    var self = this, isOption = false;
-    if (this.props['tagName.'] == 'option') {
-      isOption = true;
-      if (thisNode.selected)
-        this.state['data-checked'] = '1';
-    }
-    else {
-      thisNode._syncChecked = function(toChecked) {
-        var sOld = self.state['data-checked']? '1': '';
-        var sNew = toChecked? '1': '';
-        if (sOld != sNew)
-          self.duals['data-checked'] = sNew;
-      };
-    }
-    
-    if (this.state['data-checked']) {
-      var needSync = false;
-      if (isOption && !thisNode.selected) {
-        thisNode.selected = true;
-        needSync = true;
-      }
-      
-      setTimeout( function() {
-        var navObj = findNavOwner_(self);
-        if (!navObj || navObj.$gui.inFiring) return;
-        
-        if (needSync) {  // change selected not cause parent <select>'s onchange event
-          var owner = self.widget;
-          owner = owner && owner.parent;
-          var ownerObj = owner && owner.component;
-          if (ownerObj && ownerObj.props['tagName.'] == 'optgroup') {
-            owner = owner.parent;
-            ownerObj = owner && owner.component;
-          }
-          if (ownerObj && ownerObj.syncSelected)
-            ownerObj.syncSelected();
-        }
-        
-        self.setChecked(null); // callback=null, force=false
-      },0); // wait next process to ensure widget loaded
-    }
   }
   
   findNavOwner() {
@@ -10733,133 +11504,22 @@ class TOptSpan_ extends TSpan_ {
   }
   
   fireTrigger() {
-    fireOptTrigger_(this);
+    fireTrigger_(undefined,this);  // auto check gui.syncTrigger // force fire action
   }
   
-  setChecked(callback,isForce,newOpt) { // isForce means force re-selelect
-    var justSet = false, recheckable = this.state.recheckable;
-    var ownerObj = null, self = this;
-    
-    var popOption = this.state.popOption;
-    if (popOption && newOpt)
-      popOption = this.state.popOption = Object.assign({},popOption,newOpt);
-    if (popOption && typeof popOption.path == 'string') {
-      if (!popOption.opened && !this.state.isolated) {
-        var sPath = popOption.path;
-        if (!sPath) sPath = './' + this.$gui.keyid;
-        var ele = this.componentOf(sPath);
-        ele = ele && ele.fullClone();
-        
-        if (!ele)
-          utils.instantShow('warning: can not locate popup window (' + sPath + ').');
-        else {
-          utils.popWin.showWindow(ele,popOption, function() {
-            if (recheckable) isForce = true; // let trySyncChecked() do synchronize
-            trySyncChecked();
-            self.duals['data-checked'] = '1';
-            self.fireTrigger();
-            if (callback) callback();
-          },this);
-          return;
-        }
-      }
-      
-      // popup window failed
-      if (callback) callback();
-      return;
-    }
-    
-    if (recheckable) {
-      self.state.recheckable = false;   // avoid re-enter
-      setTimeout( function() {
-        self.state.recheckable = true;
-      },300);
-    }
-    
-    function trySyncChecked() {
-      var sName;
-      if (self.props['tagName.'] == 'option') {
-        var thisNode = ReactDOM.findDOMNode(self);
-        if (thisNode && (!thisNode.selected || isForce || recheckable)) {
-          if (!thisNode.selected)
-            thisNode.selected = true;
-          
-          // manual fire <select>'s inner-onchange event
-          var owner = self.widget;
-          owner = owner && owner.parent;
-          var ownerObj = owner && owner.component;
-          if (ownerObj && ownerObj.props['tagName.'] == 'optgroup') {
-            owner = owner.parent;
-            ownerObj = owner && owner.component;
-          }
-          if (ownerObj && ownerObj.syncSelected)
-            ownerObj.syncSelected();
-        }
-      }
-      else if (sName = self.state.name) { // named group
-        if (!ownerObj) ownerObj = self.findNavOwner();
-        if (!ownerObj) return;
-        var ownerNode = ReactDOM.findDOMNode(ownerObj);
-        if (!ownerNode) return;
-        
-        var thisNode = ReactDOM.findDOMNode(self);
-        var sTag = self.props['tagName.'] || 'div', nodes = [];
-        try {
-          nodes = ownerNode.querySelectorAll(sTag + '[name="' + sName + '"]');
-        }
-        catch(e) { }
-        for (var i=0,node; node=nodes[i]; i++) {
-          if (node !== thisNode && node._syncChecked)
-            node._syncChecked(false);  // set all others: data-checked = ''
-        }
-      }
-      // else ignore
-    }
-    
-    function doCallback() {
-      if (justSet) {
-        trySyncChecked();
-        self.fireTrigger();
-      }
-      if (callback) callback();
-    }
-    
-    if (this.state.isolated) {
-      var needSet = false;
-      if ((!this.state['data-checked'] && (needSet = true)) || isForce || recheckable) {
-        justSet = true;
-        if (needSet)  // at least set checked once
-          this.duals['data-checked'] = '1';
-        this.reRender(doCallback);
-        return;
-      }
-      
-      doCallback();
-      return;
-    }
-    
-    ownerObj = this.findNavOwner();
-    if (ownerObj) {
-      var keyid = this.$gui.keyid;
-      if (keyid != ownerObj.getChecked() || isForce || recheckable) {  // if recheckable, can recall ownerObj.setChecked()
-        if (!ownerObj.canNavigateTo || ownerObj.canNavigateTo(keyid)) {
-          if (isForce || recheckable)
-            justSet = true;
-          if (!this.state['data-checked']) {  // at least set checked once
-            justSet = true;
-            this.duals['data-checked'] = '1';
-          }
-          ownerObj.setChecked(keyid, doCallback); // fire navigation
-          return;
-        }
-      }
-    }
-    doCallback();  // failed
+  clearChecked() {  // only clear this, not sync others in same group
+    if (this.state['data-checked'])
+      this.duals['data-checked'] = '';
+  }
+  
+  setChecked(callback,newOpt,isForce) { // isForce means force re-selelect
+    setOptChecked_(this,callback,newOpt,isForce);
   }
   
   $$onClick(event) {
-    event.stopPropagation();
-    this.setChecked();
+    if (W.__design__)
+      event.stopPropagation();
+    this.setChecked(null);
     if (this.$onClick) this.$onClick(event); // call by pass this
   }
 }
@@ -10891,6 +11551,7 @@ T.OptA  = new TOptA_();
 class TOptImg_ extends TOptSpan_ {
   constructor(name,desc) {
     super(name || 'OptImg',desc);
+    this._htmlText = false;
   }
   
   getDefaultProps() {
@@ -10918,210 +11579,10 @@ class TOptButton_ extends TOptSpan_ {
 T.OptButton_ = TOptButton_;
 T.OptButton  = new TOptButton_();
 
-var checkableInput_ = 'button checkbox image radio reset submit';
-
-class TOptInput_ extends TOptSpan_ {
-  constructor(name,desc) {
-    super(name || 'OptInput',desc);
-  }
-  
-  _getSchema(self,iLevel) {
-    iLevel = iLevel || 1200;
-    var dSchema = super._getSchema(self,iLevel + 200);
-    dSchema.type = [ iLevel+1,'string',['radio','checkbox','button','image'] ];
-    dSchema.value = [ iLevel+2,'string' ];
-    dSchema.src = [ iLevel+3,'string' ];
-    return dSchema;
-  }
-  
-  getDefaultProps() {
-    var dProp = super.getDefaultProps();
-    dProp['tagName.'] = 'input';
-    dProp.type = 'radio';
-    return dProp;
-  }
-  
-  getInitialState() {
-    var dState = super.getInitialState(), gui = this.$gui;
-    
-    var iPos = gui.tagAttrs.indexOf('checked');
-    if (iPos >= 0) gui.tagAttrs.splice(iPos,1);  // not use 'checked' tag
-    
-    return dState;
-  }
-  
-  componentDidMount() {
-    super.componentDidMount();
-    
-    var thisNode = ReactDOM.findDOMNode(this);
-    if (thisNode) {
-      var self = this;
-      thisNode._syncChecked = function() {
-        var sOld = self.state['data-checked']? '1': '';
-        var sNew = thisNode.checked? '1': '';
-        if (sOld != sNew)
-          self.duals['data-checked'] = sNew;
-      };
-    }
-    
-    if (this.state['data-checked']) {
-      setTimeout(function() {
-        var navObj = findNavOwner_(self);
-        if (navObj && !navObj.$gui.inFiring)
-          self.setChecked(null); // force=false
-      },0); // wait next process to ensure widget loaded
-    }
-  }
-  
-  doChange(toChecked,callback,isForce,newOpt) {  // called by radio or checkbox
-    var self = this, newChecked = toChecked;
-    
-    var popOption = self.state.popOption;
-    if (popOption && newOpt)
-      popOption = this.state.popOption = Object.assign({},popOption,newOpt);
-    if (popOption && typeof popOption.path == 'string') {
-      if (!popOption.opened && !self.state.isolated) {
-        var sPath = popOption.path;
-        if (!sPath) sPath = './' + self.$gui.keyid;
-        var ele = self.componentOf(sPath);
-        ele = ele && ele.fullClone();
-        
-        if (!ele)
-          utils.instantShow('warning: can not locate popup window (' + sPath + ')');
-        else {
-          utils.popWin.showWindow(ele,popOption, function() {
-            self.dulas['data-checked'] = '1';
-            self.fireTrigger();
-            if (callback) callback(newChecked);
-          },self);
-          return;
-        }
-      }
-      
-      // popup window failed
-      if (newChecked) newChecked = false;
-      if (callback) callback(newChecked);
-      return;
-    }
-    
-    var canFire = false;
-    function doCallback() {
-      if (canFire) self.fireTrigger();
-      if (callback) callback(newChecked);
-    }
-    
-    var recheckable = self.state.recheckable;
-    if (toChecked && recheckable) {
-      self.state.recheckable = false;  // avoid re-enter
-      setTimeout( function() {
-        self.state.recheckable = true;
-      },300);
-    }
-    
-    if (self.state.isolated) {
-      var sChecked = toChecked? '1': '', changed = false;
-      if (!self.state['data-checked'] != !toChecked) {
-        changed = true;
-        self.duals['data-checked'] = sChecked;
-      }
-      
-      if (toChecked && (changed || isForce || recheckable))
-        canFire = true;
-      return doCallback();
-    }
-    
-    var ownerObj = self.findNavOwner();
-    if (ownerObj) {
-      var keyid = self.$gui.keyid;
-      if (toChecked && (ownerObj.getChecked() != keyid || isForce || recheckable)) {
-        if (ownerObj.canNavigateTo && !ownerObj.canNavigateTo(keyid))
-          newChecked = false; // can not change checked state
-        else {
-          self.duals['data-checked'] = '1';
-          ownerObj.setChecked(keyid, function() {
-            canFire = true;
-            doCallback(); // fire navigation
-          });
-          return;
-        }
-      }
-    }
-    
-    var sChecked = newChecked? '1': '';
-    if (!self.state['data-checked'] != !newChecked) {
-      self.duals['data-checked'] = sChecked;
-      setTimeout( function() {
-        doCallback();  // do callback after 'data-checked' changed
-      },0);
-    }
-    else doCallback();
-  }
-  
-  setChecked(callback,isForce,newOpt) {
-    var targ = ReactDOM.findDOMNode(this);
-    if (!targ) return;
-    
-    var self = this;
-    self.doChange(true, function(newChecked) {
-      if (targ.checked != newChecked)
-        targ.checked = newChecked;
-      
-      var sName = self.state.name;
-      if (sName && self.props.type == 'radio') { // synchronize radio group
-        var ownerObj = self.findNavOwner(), ownerNode = ownerObj && ReactDOM.findDOMNode(ownerObj);
-        if (!ownerNode) return;
-        
-        var nodes = ownerNode.querySelectorAll('input[type="radio"]');
-        for (var i=0,node; node=nodes[i]; i++) {
-          if (node._syncChecked && node.getAttribute('name') === sName)
-            node._syncChecked();
-        }
-      }
-      
-      if (callback) callback();
-    },isForce,newOpt);
-  }
-  
-  $$onChange(event) {
-    var targ = ReactDOM.findDOMNode(this);
-    if (!targ) return;
-    
-    performChange(this,targ);
-    if (this.$onChange) this.$onChange(event);
-    
-    function performChange(self,targ) {
-      var sType = self.props.type;
-      if (checkableInput_.indexOf(sType) >= 0) {
-        self.doChange(targ.checked, function(newChecked) {
-          if (targ.checked != newChecked)
-            targ.checked = newChecked; // ignore further $onChange() // maybe fire $$onChange again
-          
-          var sName = self.state.name;
-          if (sName && sType == 'radio') { // synchronize radio group
-            var ownerObj = self.findNavOwner(), ownerNode = ownerObj && ReactDOM.findDOMNode(ownerObj);
-            if (!ownerNode) return;
-            
-            var nodes = ownerNode.querySelectorAll('input[type="radio"]');
-            for (var i=0,node; node=nodes[i]; i++) {
-              if (node._syncChecked && node.getAttribute('name') === sName)
-                node._syncChecked();
-            }
-          }
-        },false);
-      }
-      else { // none-checkable, just keep content synchronized, not fire setChecked()
-        self.setState({value: targ.value});
-      }
-    }
-  }
-}
-
-T.OptInput_ = TOptInput_;
-T.OptInput  = new TOptInput_();
-
 class TOptOption_ extends TOptSpan_ {
   constructor(name,desc) {
     super(name || 'OptOption',desc);
+    this._silentProp.push('selected'); // not save 'selected', suggest only using 'data-checked'
   }
   
   _getSchema(self,iLevel) {
@@ -11129,9 +11590,25 @@ class TOptOption_ extends TOptSpan_ {
     var dSchema = super._getSchema(self,iLevel + 200);
     dSchema.value = [ iLevel+1,'string' ];
     dSchema.label = [ iLevel+2,'string' ];
-    dSchema.selected = [ iLevel+3,'string',['','selected'] ];
-    dSchema.disabled = [ iLevel+4,'string',['','disabled'] ];
+    dSchema.disabled = [ iLevel+3,'string',['','disabled'] ];
     return dSchema;
+  }
+  
+  getInitialState() {
+    var dState = super.getInitialState(), gui = this.$gui;
+    
+    this.defineDual('data-checked', function(value,oldValue) {
+      var sValue = (value === 'false' || value === '0' || !value? '': '1');
+      if (this.props.hasOwnProperty('selected'))
+        this.state.selected = sValue; // avoid using duals.selected = xx
+      
+      var self = this;
+      setTimeout( function() {
+        var node = ReactDOM.findDOMNode(self);
+        if (node) node.selected = !!value; // maybe no duals.selected, synchorized here
+      },0);
+    });
+    return dState;
   }
   
   getDefaultProps() {
@@ -11144,159 +11621,11 @@ class TOptOption_ extends TOptSpan_ {
 T.OptOption_ = TOptOption_;
 T.OptOption  = new TOptOption_();
 
-function addOptSchema_(dSchema,iLevel) {
-  var sBoolStr = '[string]: 0 or 1';
-  dSchema['data-checked'] = [ iLevel+1,'string',null,sBoolStr ];
-  dSchema.isolated = [ iLevel+2,'string',null,sBoolStr ];
-  dSchema.recheckable = [ iLevel+3,'string',null,sBoolStr ];
-  dSchema.trigger = [iLevel+4,'string',null,'[string]: [sPath,{pop_option},sPath,[dual_data], ...]'];
-  dSchema.popOption = [iLevel+5,'object',null,'[object]: {path:bodyElePath}'];
-  return dSchema;
-}
-
-function defineOptDual_(self) {
-  self.defineDual('isolated', function(value,oldValue) {
-    this.state.isolated = (value === 'false' || value === '0'? false: !!value);
-  },false);
-  self.defineDual('recheckable', function(value,oldValue) {
-    this.state.recheckable = (value === 'false' || value === '0'? false: !!value);
-  },false);
-  self.defineDual('popOption');
-  self.defineDual('data-checked', function(value,oldValue) {
-    this.state['data-checked'] = (value === 'false' || value === '0' || !value? '': '1');
-  },'');
-  
-  self.undefineDual('trigger');
-  self.defineDual('trigger', function(value,oldValue) {
-    this.state.trigger = value;
-    setupOptTrigger_(this,value,oldValue);
-  });
-}
-
-function checkDefChecked_(self) {
-  var thisNode = ReactDOM.findDOMNode(self);
-  if (thisNode) {
-    thisNode._syncChecked = function(toChecked) {
-      var sOld = self.state['data-checked']? '1': '';
-      var sNew = toChecked? '1': '';
-      if (sOld != sNew)
-        self.duals['data-checked'] = sNew;
-    };
-  }
-  
-  if (self.state['data-checked']) {
-    setTimeout( function() {
-      var navObj = findNavOwner_(self);
-      if (navObj && !navObj.$gui.inFiring)
-        self.setChecked(null); // force=false
-    },0); // wait next process to ensure widget loaded
-  }
-}
-
-function setOptChecked_(self,callback,isForce,newOpt) {
-  var recheckable = self.state.recheckable;
-  var ownerObj = null;
-  
-  var popOption = self.state.popOption;
-  if (popOption && newOpt)
-    popOption = self.state.popOption = Object.assign({},popOption,newOpt);
-  if (popOption && typeof popOption.path == 'string') {
-    if (!popOption.opened && !self.state.isolated) {
-      var sPath = popOption.path;
-      if (!sPath) sPath = './' + self.$gui.keyid;
-      var ele = self.componentOf(sPath);
-      ele = ele && ele.fullClone();
-      
-      if (!ele)
-        utils.instantShow('warning: can not locate popup window (' + sPath + ')');
-      else {
-        utils.popWin.showWindow(ele,popOption, function() {
-          trySyncChecked();
-          self.duals['data-checked'] = '1';
-          self.fireTrigger();
-          if (callback) callback();
-        },self);
-        return;
-      }
-    }
-    
-    // popup window failed
-    if (callback) callback();
-    return;
-  }
-  
-  if (recheckable) {
-    self.state.recheckable = false;   // avoid re-enter
-    setTimeout( function() {
-      self.state.recheckable = true;
-    },300);
-  }
-  
-  function trySyncChecked() {
-    var sName = self.state.name;
-    if (sName) { // named group
-      if (!ownerObj) ownerObj = self.findNavOwner();
-      if (!ownerObj) return;
-      var ownerNode = ReactDOM.findDOMNode(ownerObj);
-      if (!ownerNode) return;
-      
-      var thisNode = ReactDOM.findDOMNode(self);
-      var sTag = self.props['tagName.'] || 'div', nodes = [];
-      try {
-        nodes = ownerNode.querySelectorAll(sTag + '[name="' + sName + '"]');
-      }
-      catch(e) { }
-      for (var i=0,node; node=nodes[i]; i++) {
-        if (node !== thisNode && node._syncChecked)
-          node._syncChecked(false);  // set all others: data-checked = ''
-      }
-    }
-    // else ignore
-  }
-  
-  var justSet = false;
-  function doCallback() {
-    if (justSet) {
-      trySyncChecked();
-      self.fireTrigger();
-    }
-    if (callback) callback();
-  }
-  
-  if (self.state.isolated) {
-    if (isForce || recheckable)
-      justSet = true;
-    if (!self.state['data-checked']) {  // at least set checked once
-      justSet = true;
-      self.duals['data-checked'] = '1';
-    }
-    doCallback();
-    return;
-  }
-  
-  var keyid = self.$gui.keyid;
-  ownerObj = self.findNavOwner();
-  if (ownerObj) {
-    if (ownerObj.getChecked() != keyid || isForce || recheckable) {
-      if (!ownerObj.canNavigateTo || ownerObj.canNavigateTo(keyid)) {
-        if (isForce || recheckable)
-          justSet = true;
-        if (!self.state['data-checked']) {  // at least set checked once
-          justSet = true;
-          self.duals['data-checked'] = '1';
-        }
-        ownerObj.setChecked(keyid,doCallback); // fire navigation
-        return;
-      }
-    }
-  }
-  doCallback();
-}
-
 class TOptDiv_ extends TDiv_ {
   constructor(name,desc) {
     super(name || 'OptDiv',desc);
-    this._slientProp.push('isOption.');
+    this._silentProp.push('isOption.');
+    this._defaultProp['data-checked'] = '';
   }
   
   _getSchema(self,iLevel) {
@@ -11315,13 +11644,8 @@ class TOptDiv_ extends TDiv_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    defineOptDual_(this);
+    defineOptDual_(this,dState);
     return dState;
-  }
-  
-  componentDidMount() {
-    super.componentDidMount();
-    checkDefChecked_(this);
   }
   
   findNavOwner() {
@@ -11329,16 +11653,22 @@ class TOptDiv_ extends TDiv_ {
   }
   
   fireTrigger() {
-    fireOptTrigger_(this);
+    fireTrigger_(undefined,this);
   }
   
-  setChecked(callback,isForce,newOpt) {
-    setOptChecked_(this,callback,isForce,newOpt);
+  clearChecked() {  // only clear this, not sync others in same group
+    if (this.state['data-checked'])
+      this.duals['data-checked'] = '';
+  }
+  
+  setChecked(callback,newOpt,isForce) {
+    setOptChecked_(this,callback,newOpt,isForce);
   }
   
   $$onClick(event) {
-    event.stopPropagation();
-    this.setChecked();
+    if (W.__design__)
+      event.stopPropagation();
+    this.setChecked(null);
     if (this.$onClick) this.$onClick(event); // by pass this
   }
 }
@@ -11349,7 +11679,8 @@ T.OptDiv  = new TOptDiv_();
 class TOptLi_ extends TP_ {
   constructor(name,desc) {
     super(name || 'OptLi',desc);
-    this._slientProp.push('isOption.');
+    this._silentProp.push('isOption.');
+    this._defaultProp['data-checked'] = '';
   }
   
   _getSchema(self,iLevel) {
@@ -11368,13 +11699,8 @@ class TOptLi_ extends TP_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    defineOptDual_(this);
+    defineOptDual_(this,dState);
     return dState;
-  }
-  
-  componentDidMount() {
-    super.componentDidMount();
-    checkDefChecked_(this);
   }
   
   findNavOwner() {
@@ -11382,22 +11708,101 @@ class TOptLi_ extends TP_ {
   }
   
   fireTrigger() {
-    fireOptTrigger_(this);
+    fireTrigger_(undefined,this);
   }
   
-  setChecked(callback,isForce,newOpt) {
-    setOptChecked_(this,callback,isForce,newOpt);
+  clearChecked() {  // only clear this, not sync others in same group
+    if (this.state['data-checked'])
+      this.duals['data-checked'] = '';
+  }
+  
+  setChecked(callback,newOpt,isForce) {
+    setOptChecked_(this,callback,newOpt,isForce);
   }
   
   $$onClick(event) {
-    event.stopPropagation();
-    this.setChecked();
+    if (W.__design__)
+      event.stopPropagation();
+    this.setChecked(null);
     if (this.$onClick) this.$onClick(event); // by pass this
   }
 }
 
 T.OptLi_ = TOptLi_;
 T.OptLi  = new TOptLi_();
+
+class TOptInput_ extends TOptSpan_ {
+  constructor(name,desc) {  // input.type: checkbox radio button image reset submit
+    super(name || 'OptInput',desc);
+    this._htmlText = false;
+  }
+  
+  _getSchema(self,iLevel) {
+    iLevel = iLevel || 1200;
+    var dSchema = super._getSchema(self,iLevel + 200);
+    dSchema.type = [ iLevel+1,'string',['checkbox','radio','button','image'] ];
+    dSchema.value = [ iLevel+2,'string' ];
+    dSchema.src = [ iLevel+3,'string' ];
+    return dSchema;
+  }
+  
+  getDefaultProps() {
+    var dProp = super.getDefaultProps();
+    dProp['tagName.'] = 'input';
+    dProp.type = 'checkbox';
+    dProp.checked = '';
+    return dProp;
+  }
+  
+  getInitialState() {
+    var dState = super.getInitialState(), gui = this.$gui;
+    
+    this.defineDual('data-checked', function(value,oldValue) {
+      var sValue = (value === 'false' || value === '0' || !value? '': '1');
+      this.state.checked = sValue; // not use duals.checked = xx
+    });
+    return dState;
+  }
+  
+  clearChecked(targ) {
+    if (!targ) targ = ReactDOM.findDOMNode(this);
+    if (targ) {
+      if (targ.checked) targ.checked = false; // will trigger onChange
+      if (this.state['data-checked'])
+        this.duals['data-checked'] = '';
+    }
+  }
+  
+  $$onChange(event) {
+    if (W.__design__)
+      event.stopPropagation();
+    
+    var sType = this.state.type;
+    if (sType === 'checkbox' || sType === 'radio') {
+      var targ = ReactDOM.findDOMNode(this);
+      if (targ) {
+        if (targ.checked)
+          this.setChecked(null);
+        else this.clearChecked(targ);
+      }
+    }
+    
+    if (this.$onChange) this.$onChange(event);
+  }
+  
+  $$onClick(event) {
+    if (W.__design__)
+      event.stopPropagation();
+    var sType = this.state.type;
+    if (sType !== 'checkbox' && sType !== 'radio')
+      this.setChecked(null);
+    
+    if (this.$onClick) this.$onClick(event);
+  }
+}
+
+T.OptInput_ = TOptInput_;
+T.OptInput  = new TOptInput_();
 
 function setTemplateChild_(temp,child) {
   var sPath = getElementKey_(child);
@@ -11576,7 +11981,7 @@ function templateElement_(thisObj,sPath) {
 class TTempPanel_ extends TPanel_ {
   constructor(name,desc) {
     super(name || 'TempPanel',desc);
-    this._slientProp.push('isTemplate.','data-temp.type');
+    this._silentProp.push('isTemplate.','data-temp.type');
   }
   
   getDefaultProps() {
@@ -11643,7 +12048,8 @@ T.TempPanel  = new TTempPanel_();
 class TTempDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'TempDiv',desc);
-    this._slientProp.push('isTemplate.','data-temp.type');
+    this._silentProp.push('isTemplate.','tagName.','data-temp.type');
+    this._htmlText = true;
   }
   
   getDefaultProps() {
@@ -11712,7 +12118,7 @@ T.TempDiv  = new TTempDiv_();
 class TTempSpan_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'TempSpan',desc);
-    this._slientProp.push('isTemplate.','data-temp.type');
+    this._silentProp.push('isTemplate.','data-temp.type');
   }
   
   getDefaultProps() {
@@ -11768,7 +12174,8 @@ T.TempSpan  = new TTempSpan_();
 class TRefDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'RefDiv',desc);
-    this._slientProp.push('isReference.');
+    this._silentProp.push('isReference.');
+    this._htmlText = true;
   }
   
   getDefaultProps() {
@@ -11814,7 +12221,7 @@ var RefDiv__ = creator.RefDiv__ = React.createClass(T.RefDiv._extend());
 class TRefSpan_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'RefSpan',desc);
-    this._slientProp.push('isReference.');
+    this._silentProp.push('isReference.');
   }
   
   getDefaultProps() {
@@ -11860,12 +12267,14 @@ var RefSpan__ = creator.RefSpan__ = React.createClass(T.RefSpan._extend());
 class TScenePage_ extends TPanel_ {
   constructor(name,desc) {
     super(name || 'ScenePage',desc);
-    this._slientProp.push('isScenePage.');
+    this._silentProp.push('isScenePage.');
+    this._defaultProp.noShow = '';
   }
   
   _getSchema(self,iLevel) {
     iLevel = iLevel || 1200;
     var dSchema = super._getSchema(self,iLevel+200);
+    dSchema.noShow = [ iLevel+1,'string',['','1'],'[string]: disable show content' ];
     
     var sPerPixel = '[number]: 0~1 for percent, 0.9999 for 100%, N pixels';
     var bWd = dSchema.width, bHi = dSchema.height;
@@ -11876,6 +12285,7 @@ class TScenePage_ extends TPanel_ {
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
+    dProp.noShow = '';
     // dProp.width = 0.9999;   // default is 0.9999
     // dProp.height = 0.9999;  // defalut is 0.9999
     dProp['isScenePage.'] = 1;
@@ -11941,8 +12351,14 @@ class TScenePage_ extends TPanel_ {
     
     var bChild = this.prepareState();
     
+    var dStyle = undefined;
+    if (this.props.noShow && !W.__design__) { // if W.__design__, no change duals.style
+      dStyle = Object.assign({},this.state.style);
+      dStyle.display = 'none';
+    }
+    
     var centerDiv = React.createElement('div',{'className':'rewgt-center'},bChild);
-    var props = setupRenderProp_(this);
+    var props = setupRenderProp_(this,dStyle);
     return React.createElement('article',props,centerDiv);
   }
 }
@@ -12059,7 +12475,8 @@ class TMaskPanel_ extends TPanel_ {
         var bodyEle2 = React.cloneElement(bodyEle,dProp2_);
         gui.compIdx[sKey] = gui.comps.length;
         gui.winComp = gui.comps.push(bodyEle2) - 1;
-        popOption.opened = true;
+        if (popOption.state)
+          popOption.state.opened = true;
       }
     });
     
@@ -12132,7 +12549,7 @@ class TMaskPanel_ extends TPanel_ {
   
   componentWillUnmount() {
     var opt = this.state.popOption;
-    if (opt && opt.opened) opt.opened = false;
+    if (opt && opt.state && opt.state.opened) opt.state.opened = false;
     super.componentWillUnmount();
   }
 }
@@ -12141,9 +12558,38 @@ var MaskPanel__ = React.createClass((new TMaskPanel_())._extend());
 
 // MarkedDiv
 //----------
+var SHADOW_WTC_FLAGS_ = null;  // used only in __design__
+function shadowWtcTagFlag_() {
+  if (!SHADOW_WTC_FLAGS_) {    // not initialized yet
+    SHADOW_WTC_FLAGS_ = {};
+    scanOneLevel(SHADOW_WTC_FLAGS_,T,'');
+  }
+  return SHADOW_WTC_FLAGS_;
+  
+  function scanOneLevel(dRet,aSet,sPath) {
+    Object.keys(aSet).forEach( function(sKey) {
+      if (!sKey || sKey[sKey.length-1] == '_') return;
+      var value = aSet[sKey];
+      if (typeof value != 'object') return;
+      
+      if (value.getDefaultProps) {
+        var props = value.getDefaultProps(), iFlag = 1;
+        if (props['childInline.']) {
+          if (hasClass_(props.className || '','rewgt-unit'))
+            iFlag = 2;
+          else iFlag = 3;
+        }
+        // else iFlag = 1; // Panel(0) or Unit(1), take all of them as Unit
+        if (iFlag != 3)    // no need regist Span(3), default is 3
+          dRet[sPath+sKey] = iFlag;
+      }
+      else scanOneLevel(dRet,value,sPath + sKey + '.');  // scan sub-level
+    });
+  }
+}
 
 function renewMarkdown_(compObj,mdText,callback) {
-  var gui = compObj.$gui;
+  var gui = compObj.$gui, isTable = compObj.props['markedTable.'], notShow = compObj.props.noShow;
   
   try {
     var sHtml = utils.marked(mdText);  // maybe raise exception
@@ -12157,7 +12603,7 @@ function renewMarkdown_(compObj,mdText,callback) {
         if (sKey) bKey.push('-' + sKey);
       }
     });
-    if (bKey.length) {
+    if (bKey.length && compObj.isHooked) {
       compObj.setChild(bKey, function() {
         resetComp(node);
       });
@@ -12169,46 +12615,193 @@ function renewMarkdown_(compObj,mdText,callback) {
     if (callback) callback(false);
   }
   
-  function resetComp(node) {
+  function resetComp(htmlNode) {
     gui.removeNum += gui.comps.length; // let childNumId changed
     gui.compIdx = {}; gui.comps = [];  // should be no child
     gui.statics = {};
     
-    for (var i=0,item; item = node.children[i]; i++) {
-      if (item.nodeName == 'DIV' && item.classList.contains('rewgt-mdref')) {
+    if (isTable) {
+      compObj.firstScan = true;
+      compObj.cellKeys = {};
+      compObj.cellStyles = {};
+    }
+    
+    var regNode = []; // [[sKey,ele],...] for MarkedDiv, [[[sKey,ele],...],...] for MarkedTable
+    var regSub = [];
+    for (var i=0,node; node = htmlNode.children[i]; i++) {
+      var sPath = node.getAttribute('$'), sTag = node.nodeName;
+      if (sPath && (sTag == 'PRE' || sTag == 'DIV')) {
         if (bList.length) {
           AddOneStatic(gui,bList);
           bList = [];  // create new, old should append to gui.statics
         }
         
-        var sPath = item.getAttribute('path');
-        if (sPath) {
-          var keyIdx = gui.comps.length, sKey = '$' + (keyIdx + gui.removeNum);
-          var dProp = {'hookTo.':compObj.widget, '$':sPath, 'keyid.':sKey, key:sKey, style:{display:'block'}};
-          for (var i2=0,item2; item2=item.attributes[i2]; i2++) {
-            var sName2 = item2.name;
-            if (sName2.startsWith('data-'))  // only pass 'data-*'
-              dProp[sName2] = item2.value;
+        var bInfo = creator.scanNodeAttr(node,'',0), sTemplate = bInfo && bInfo[0];
+        if (!bInfo || sTemplate === 'RefSpan') {
+          console.log('error: invalid node (<' + sTag + ' $=' + sPath + '>)');
+          continue;
+        }
+        var dProp = bInfo[1];
+        
+        var isWTC = sTemplate != 'RefDiv', isOrgTag = false;
+        var wtcCls, childCls = null, childProp = null;
+        if (isWTC) {
+          var ch, bSeg = sTemplate.split('.');
+          if (bSeg.length == 1 && (ch=sTemplate[0]) >= 'a' && ch <= 'z') { // html tag, such as: div button
+            isOrgTag = true;
+            wtcCls = sTemplate;
+          }
+          else {
+            var clsSet = getWTC_(sTemplate), sName = bSeg.pop();
+            wtcCls = clsSet[sName];
+            if (!wtcCls) {
+              console.log('error: can not find WTC (' + sTemplate + ')');
+              continue;
+            }
+            
+            if (wtcCls.defaultProps && !hasClass_(wtcCls.defaultProps.className || '',['rewgt-panel','rewgt-unit'])) {
+              childCls = wtcCls; childProp = dProp;
+              wtcCls = P__; dProp = {};
+            }
+          }
+        }
+        else wtcCls = RefDiv__;
+        
+        var keyid, keyIdx = gui.comps.length, sKey = dProp.key;
+        var namedKey = '', registKey = '';
+        if (!sKey || typeof sKey != 'string' || sKey.search(/^auto[0-9]+$/) == 0) { // take 'autoN' as none-define
+          registKey = keyid = 'auto' + (keyIdx + gui.removeNum);
+          if (!isWTC)  // is linker
+            sKey = keyid = '$' + keyid;
+          else sKey = keyid;
+        }
+        else {
+          namedKey = registKey = sKey;
+          if (!isWTC && sKey[0] != '$')
+            sKey = '$' + sKey;
+          keyid = sKey;
+        }
+        
+        var ele;
+        if (isOrgTag) {
+          dProp.key = sKey;
+          var sHtml = dProp['html.'] || null;
+          delete dProp['html.']; delete dProp['isPre.'];
+          ele = React.createElement(wtcCls,dProp,sHtml); // only scan one level
+        }
+        else {
+          Object.assign(dProp,{'hookTo.':compObj.widget, 'keyid.':keyid, key:sKey});
+          if (!isWTC) {       // is linker
+            if (dProp.style)
+              dProp.style.display = '';      // to default display: block table ...
+            else dProp.style = {display:''};
           }
           
-          var ele = React.createElement(RefDiv__,dProp);
-          gui.compIdx[sKey] = keyIdx;
-          gui.comps.push(ele);
+          var bChild_ = [];
+          if (sTag == 'DIV')  // ignore sub node of <pre>
+            bChild_ = scanPreCode(node,'['+i+'].'+sTemplate);
+          if (childCls) {
+            bChild_.unshift(childCls,childProp);
+            bChild_ = [React.createElement.apply(null,bChild_)];
+          }
           
-          if (inFirstLoading_) pendingRefers_.push([compObj,sKey]);
+          bChild_.unshift(wtcCls,dProp);
+          ele = React.createElement.apply(null,bChild_);
+        }
+        
+        gui.compIdx[sKey] = keyIdx;
+        gui.comps.push(ele);
+        if (namedKey) {
+          if (isTable)
+            regNode[namedKey] = ele;
+          else regSub[namedKey] = ele;
+        }
+        regSub.push([registKey,ele]);
+        
+        if (inFirstLoading_ && !isWTC) // !isWTC must be !isOrgTag
+          pendingRefers_.push([compObj,sKey]);
+      }
+      else if (!sPath) {
+        if (!isTable)
+          bList.push(node);      // record static nodes
+        else {
+          if (bList.length) {    // default table cell only hold one block-node
+            AddOneStatic(gui,bList);
+            bList = [];
+          }
+          if (sTag == 'HR') {    // new table row
+            var ele = React.createElement('hr',{'markedRow.':true});
+            gui.comps.push(ele); // no need hook  // no need add to gui.compIdx
+            
+            if (isTable) {
+              regNode.push(regSub);  // regSub maybe is []
+              regSub = [];
+            }
+          }
+          else bList.push(node);
         }
       }
-      else bList.push(item);  // record static nodes
+      // else, '$' defined    // ignore, such as <span $=xx>
+    }
+    if (bList.length) AddOneStatic(gui,bList);
+    if (isTable) {
+      if (regSub.length)
+        regNode.push(regSub); // record left named element
+    }
+    else regNode = regSub;
+    
+    if (callback) {
+      setTimeout( function() {
+        callback(true,regNode);
+      },0);
     }
     
-    if (bList.length) AddOneStatic(gui,bList);
-    if (callback) callback(true);
+    function scanPreCode(htmlNode,sPrefix) {
+      var bRet = [];
+      for (var i=0,node; node = htmlNode.children[i]; i++) {
+        var bInfo = creator.scanNodeAttr(node,sPrefix,i);
+        if (!bInfo) continue;  // ignore all none '$=xx' node
+        var sTemplate = bInfo[0], dProp = bInfo[1];
+        
+        if (sTemplate == 'RefDiv')
+          bRet.push(React.createElement(RefDiv__,dProp));
+        else if (sTemplate == 'RefSpan')
+          bRet.push(React.createElement(RefSpan__,dProp));
+        else {  // is WTC
+          var ch, bSeg = sTemplate.split('.');
+          if (bSeg.length == 1 && (ch=sTemplate[0]) >= 'a' && ch <= 'z') { // html tag, such as: div button
+            var sHtml = dProp['html.'] || null;
+            delete dProp['html.']; delete dProp['isPre.'];
+            bRet.push(React.createElement(wtcCls,dProp,sHtml)); // only scan one level for pure react element
+          }
+          else {
+            var clsSet = getWTC_(sTemplate), sName = bSeg.pop(), wtcCls = clsSet[sName];
+            var sPrefix2 = sPrefix + '[' + i + '].' + sTemplate;
+            if (!wtcCls) {
+              console.log('error: can not find WTC (' + sPrefix2 + ')');
+              continue;
+            }
+            
+            var sTag = node.nodeName, bChild_ = [];
+            if (sTag == 'DIV' || sTag == 'SPAN')
+              bChild_ = scanPreCode(node,sPrefix2); // if no child, result is []
+            bChild_.unshift(wtcCls,dProp);
+            bRet.push(React.createElement.apply(null,bChild_));
+          }
+        }
+      }
+      
+      return bRet;
+    }
   }
   
   function AddOneStatic(gui,bList) {
-    var sName = (0x100000 + gui.comps.length) + ''; 
-    var keyIdx = gui.comps.length, keyid = keyIdx + gui.removeNum, sKey = keyid + '';
-    var dProp = {className:'rewgt-static', name:sName, 'keyid.':keyid, key:sKey};
+    if (notShow) return;
+    
+    var keyIdx = gui.comps.length, sName = (0x100000 + gui.removeNum + keyIdx) + ''; 
+    var keyid = keyIdx + gui.removeNum, sKey = keyid + '';
+    var dProp = {className:'rewgt-static', name:sName, key:sKey};
+    
     gui.compIdx[sKey] = keyIdx;
     gui.comps.push(React.createElement('div',dProp));
     gui.statics[sName] = bList;
@@ -12218,15 +12811,35 @@ function renewMarkdown_(compObj,mdText,callback) {
 class TMarkedDiv_ extends TDiv_ {
   constructor(name,desc) {
     super(name || 'MarkedDiv',desc);
-    this._statedProp.push('mark');
-    this._slientProp.push('hasStatic.','noSaveChild.');
+    this._defaultProp.width = undefined;
+    this._defaultProp.minWidth = 20;
+    this._defaultProp.noShow = '';
+    this._silentProp.push('marked.','hasStatic.','noSaveChild.');
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    props.noShow = '';
+    props.width = null;
+    props.minWidth = 20;     // minWidth=20  minHeight=20
+    props['marked.'] = true;
+    props['hasStatic.'] = true;
+    props['noSaveChild.'] = true;
+    props['isPre.'] = true;  // means save as <pre $=MarkedDiv>
+    return props;
+  }
+  
+  _getSchema(self,iLevel) {
+    iLevel = iLevel || 1200;
+    var dSchema = super._getSchema(self,iLevel + 200);
+    dSchema.noShow = [ iLevel+1,'string',['','1'],'[string]: disable show content' ];
+    return dSchema;
   }
   
   _getGroupOpt(self) {
     var dOpt = { type: 'mono', // mono, extend
       editable: 'none',        // all, some, none // 'some' means can not remove sub-level widget
       baseUrl: '/app/files/rewgt/web', tools: [],
-      // mediaType, icon, registed, canPreview    // for type='extend'  // not used yet
     };
     var wdgt = self.widget;
     if (!wdgt || !self.isHooked) // widget not ready yet, dOpt.tools is empty
@@ -12236,26 +12849,41 @@ class TMarkedDiv_ extends TDiv_ {
     dOpt.tools = [ {
       name:'editor', icon:'res/edit_txt.png', title:'edit markdown',
       url:'edit_markdown.html', halfScreen:true, noMove:false,
-      clickable:true, width:0.98, height:0.9, // left,top, no assign means center
+      clickable:true, width:0.9, height:0.9, // left,top, no assign means center
       
       get: function(compObj) { // compObj === self
-        var sMarked = self.state.mark || self.props.mark || '';
-        return [unescape(sMarked),sPath];
+        var sMarked = self.state['html.'] || '';
+        return [sMarked,sPath,shadowWtcTagFlag_()];
       },
       
       set: function(compObj,outValue,beClose) {
-        if (!beClose) return;  // ignore
         var sText = outValue[0], sWdgtPath = outValue[1];
         if (self !== compObj || sWdgtPath != sPath) return; // check available
         
         if (typeof sText == 'string') {
-          renewMarkdown_(compObj,sText, function(succ) {
+          renewMarkdown_(compObj,sText, function(succ,regNode) {    // compObj must isHooked
             if (!succ) return;
-            compObj.setState({mark:escape(sText)}, function() {
-              renewStaticChild(compObj);
-              if (W.__design__) {  // notify backup current doc
+            
+            // not use compObj.duals['html.'] = sText  // no trigger listen in __design__
+            compObj.setState({'html.':sText,id__:identicalId()}, function() {
+              renewStaticChild(compObj,true);
+              
+              var newNodes = null;
+              if (compObj.state.nodes.length == 0) {
+                if (regNode && regNode.length)
+                  newNodes = regNode;
+                // else, both old and new is empty, ignore update
+              }
+              else newNodes = regNode || [];
+              if (newNodes) {
+                setTimeout( function() {
+                  compObj.duals.nodes = newNodes;
+                },10); // ensure content of newNodes be prepared first, they maybe linked
+              }
+              
+              if (W.__design__ && beClose) {  // notify backup current doc
                 if (containNode_ && containNode_.notifyBackup)
-                  containNode_.notifyBackup(sWdgtPath); // renew schema prop editor
+                  containNode_.notifyBackup(sWdgtPath,1000); // renew schema prop editor
               }
             }); // gui.comps changed, use compObj.setState() trigger render
           });
@@ -12265,46 +12893,202 @@ class TMarkedDiv_ extends TDiv_ {
     return dOpt;
   }
   
-  _getSchema(self,iLevel) {
-    iLevel = iLevel || 1200;
-    var dSchema = super._getSchema(self,iLevel+200);
-    dSchema.mark = [ iLevel+1,'string' ];
-    return dSchema;
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['hasStatic.'] = true;
-    props['noSaveChild.'] = true;
-    return props;
-  }
-  
   getInitialState() {
-    var dState = super.getInitialState();
-    this.undefineDual('html.');  // disable inline html text
+    var state = super.getInitialState();
     
-    this.defineDual('mark', function(value,oldValue) {
-      if (this.widget && typeof value == 'string') {
-        var self = this;
-        renewMarkdown_(this,unescape(value), function(succ) {
-          if (!succ) return;
-          self.setState({mark:value}, function() {
-            renewStaticChild(self);
-          });
-        });
+    var self = this, gui = this.$gui, ownerObj = this.widget;
+    ownerObj = ownerObj && ownerObj.parent;
+    ownerObj = ownerObj && ownerObj.component;
+    if (ownerObj && ownerObj.props['markedTable.']) {
+      this.defineDual('colSpan', function(value,oldValue) {
+        var num = parseInt(value);
+        this.state.colSpan = isNaN(num)? undefined: num;
+        renderOwner();
+      });  // default is undefined  // undefined means col-span=1
+      this.defineDual('rowSpan', function(value,oldValue) {
+        var num = parseInt(value);
+        this.state.rowSpan = isNaN(num)? undefined: num;
+        renderOwner();
+      });  // default is undefined
+      
+      if (this.props.tdStyle) {
+        this.defineDual('tdStyle', function(value,oldValue) {
+          this.state.tdStyle = Object.assign({},oldValue,value);
+          renderOwner();
+        },this.props.tdStyle);
       }
-    },'');
+    }
     
-    return dState;
+    gui.delayTid = 0;
+    this.defineDual('html.', function(value,oldValue) {
+      if (!this.widget || typeof value != 'string') return;
+      
+      var iCount = 0;
+      delayRun();
+      
+      function delayRun() {
+        if (gui.delayTid) { // avoid side effects, ignore previous `duals['html.'] = s`
+          clearTimeout(gui.delayTid);
+          gui.delayTid = 0;
+        }
+        
+        if (++iCount > 24) return; // try within 2.4 seconds
+        if (self.isHooked) {
+          renewMarkdown_(self,value, function(succ,regNode) {
+            if (!succ) return;
+            self.reRender( function () {
+              renewStaticChild(self,true);
+              
+              var newNodes = null;
+              if (self.state.nodes.length == 0) {
+                if (regNode && regNode.length)
+                  newNodes = regNode;
+                // else, both old and new is empty, ignore update
+              }
+              else newNodes = regNode || [];
+              if (newNodes) {
+                setTimeout( function() {
+                  self.duals.nodes = newNodes;
+                },10);
+              }
+            });
+          });
+        }
+        else { // still in creating yet, delay a moment
+          gui.delayTid = setTimeout( function () {
+            delayRun();
+          },100);
+        }
+      }
+    });
+    
+    state.nodes = [];  // preset it, should avoid first assignment
+    this.defineDual('nodes', function(value,oldValue) {
+      this.state.nodes = value;
+    }); // should not come from props.nodes  // come from 'html.' scanning
+    
+    return state;
+    
+    function renderOwner() {
+      var cellKey = self.$gui.keyid + '';
+      setTimeout( function() {
+        var owner = self.widget;
+        owner = owner && owner.parent;
+        owner = owner && owner.component;
+        if (owner && owner.cellKeys && owner.cellStyles) {
+          owner.cellKeys[cellKey] = [self.state.rowSpan,self.state.colSpan];
+          owner.cellStyles[cellKey] = self.state.tdStyle;  // maybe undefined
+          owner.reRender();  // force render
+        }
+      },0);
+    }
   }
   
   willResizing(wd,hi,inPending) { // called by parent in next render tick
     propagateResizing_(this,inPending);
     return true; // true means contine run this.setState({parentWidth,parentHeight})
   }
+  
+  render() {
+    syncProps_(this);
+    if (this.hideThis) return null;   // as <noscript>
+    
+    var bChild = this.prepareState();
+    if (this.props.noShow) bChild = null;
+    
+    var props = setupRenderProp_(this);
+    return React.createElement(this.props['tagName.'],props,bChild); // not use 'html.'
+  }
 }
 
 T.MarkedDiv_ = TMarkedDiv_;
 T.MarkedDiv  = new TMarkedDiv_();
+
+class TMarkedTable_ extends TMarkedDiv_ {
+  constructor(name,desc) {
+    super(name || 'MarkedTable',desc);
+    this._silentProp.push('markedTable.');
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    props['markedTable.'] = true;
+    props['tagName.'] = 'table';
+    return props;
+  }
+  
+  getInitialState() {
+    var state = super.getInitialState();
+    this.firstScan = true;
+    this.cellKeys = {};
+    this.cellStyles = {};
+    return state;
+  }
+  
+  render() {
+    syncProps_(this);
+    if (this.hideThis) return null;    // as <noscript>
+    
+    var bChild = this.prepareState();  // bChild is new copied
+    var props = setupRenderProp_(this);
+    if (this.props.noShow)             // not show content, only use duals.nodes
+      return React.createElement('div',props);
+    
+    if (bChild.length == 0)            // at least define one cell
+      bChild.push(React.createElement(P__,{'html.':' '}));
+    
+    var bRow = ['tbody',null], lastRow = null;
+    var self = this, firstScan = this.firstScan;
+    this.firstScan = false;
+    
+    bChild.forEach( function(child) {
+      if (child.props['markedRow.']) {
+        if (lastRow)
+          bRow.push(React.createElement.apply(null,lastRow));
+        lastRow = ['tr',null];
+      }
+      else {
+        if (!lastRow) lastRow = ['tr',null];
+        
+        var cellKey = child.props['keyid.'];
+        var rowSpan = undefined, colSpan = undefined, tdStyle = null;
+        if (cellKey !== undefined) cellKey = cellKey + '';
+        if (cellKey && child.props['marked.']) {
+          if (firstScan) {
+            var tmp, num;
+            if ((tmp=child.props['rowSpan']) && !isNaN(num=parseInt(tmp)))
+              rowSpan = num + '';
+            if ((tmp=child.props['colSpan']) && !isNaN(num=parseInt(tmp)))
+              colSpan = num + '';
+            self.cellKeys[cellKey] = [rowSpan,colSpan];
+            tdStyle = self.cellStyles[cellKey] = child.props.tdStyle; // maybe undefined
+          }
+          else {
+            var b = self.cellKeys[cellKey];
+            if (Array.isArray(b)) {
+              rowSpan = b[0];
+              colSpan = b[1];
+            }
+            tdStyle = self.cellStyles[cellKey];  // maybe undefined
+          }
+        }
+        
+        var tdProp = null;
+        if (cellKey) {
+          tdProp = {key:cellKey,rowSpan:rowSpan,colSpan:colSpan}; // rowSpan colSpan maybe undefined, overwrite history
+          if (tdStyle) tdProp.style = tdStyle;
+        }
+        lastRow.push(React.createElement('td',tdProp,child));
+      }
+    });
+    if (lastRow) bRow.push(React.createElement.apply(null,lastRow));
+    
+    var tbody = React.createElement.apply(null,bRow);
+    return React.createElement('table',props,tbody);
+  }
+}
+
+T.MarkedTable_ = TMarkedTable_;
+T.MarkedTable  = new TMarkedTable_();
 
 module.exports = T;

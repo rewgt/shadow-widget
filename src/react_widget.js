@@ -560,7 +560,7 @@ var block = {
   heading: /^ *(#{1,6}) *([^\n]+?) *#* *(?:\n+|$)/,
   nptable: noop,
   lheading: /^([^\n]+)\n *(=|-){2,} *(?:\n+|$)/,
-  blockquote: /^( *(>|&gt;)[^\n]+(\n(?!def)[^\n]+)*\n*)+/,
+  blockquote: /^( *(>|&gt;|::)[^\n]+(\n(?!def)[^\n]+)*\n*)+/,
   list: /^( *)(bull) [\s\S]+?(?:hr|def|\n{2,}(?! )(?!\1bull )\n*|\s*$)/,
   html: /^ *(?:comment *(?:\n|\s*$)|closed *(?:\n{2,}|\s*$)|closing *(?:\n{2,}|\s*$))/,
   def: /^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +["(]([^\n]+)[")])? *(?:\n+|$)/,
@@ -807,7 +807,7 @@ Lexer.prototype.token = function(src, top, bq) {
         type: 'blockquote_start'
       });
 
-      cap = cap[0].replace(/^ *(>|&gt;) ?/gm, '');
+      cap = cap[0].replace(/^ *(>|&gt;|::) ?/gm, '');
 
       // Pass `top` to keep the current
       // "toplevel" state. This is exactly

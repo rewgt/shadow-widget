@@ -8,7 +8,7 @@ var T = W.$templates, utils = W.$utils, ex = W.$ex;
 var idSetter = W.$idSetter, creator = W.$creator;
 
 utils.version = function() {
-  return '0.0.4';
+  return '0.0.5';
 };
 
 var vendorId_ = (function(sUA) {
@@ -40,7 +40,108 @@ var vendorId_ = (function(sUA) {
 })(window.navigator.userAgent.toLowerCase());
 
 utils.vendorId = vendorId_;
-utils.dragInfo = { inDragging: false, justResized: false };
+
+var re_decode64_ = /[^A-Za-z0-9\+\/\=]/g;
+var re_win32ln_  = /\r\n/g;
+var base64Key_   = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+
+var Base64_ = utils.Base64 = {
+  encode: function(input) {
+    var chr1, chr2, chr3, enc1, enc2, enc3, enc4;
+    var output = '', i = 0;
+
+    input = Base64_._utf8_encode(input);
+    while (i < input.length) {
+      chr1 = input.charCodeAt(i++);
+      chr2 = input.charCodeAt(i++);
+      chr3 = input.charCodeAt(i++);
+      enc1 = chr1 >> 2;
+      enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
+      enc3 = ((chr2 & 15) << 2) | (chr3 >> 6);
+      enc4 = chr3 & 63;
+
+      if (isNaN(chr2))
+        enc3 = enc4 = 64;
+      else if (isNaN(chr3))
+        enc4 = 64;
+      output = output + base64Key_.charAt(enc1) + base64Key_.charAt(enc2) +
+               base64Key_.charAt(enc3) + base64Key_.charAt(enc4);
+    }
+
+    return output;
+  },
+
+  decode: function(input) {
+    var chr1, chr2, chr3, enc1, enc2, enc3, enc4;
+    var output = '', i = 0;
+    
+    input = input.replace(re_decode64_,'');
+    while (i < input.length) {
+      enc1 = base64Key_.indexOf(input.charAt(i++));
+      enc2 = base64Key_.indexOf(input.charAt(i++));
+      enc3 = base64Key_.indexOf(input.charAt(i++));
+      enc4 = base64Key_.indexOf(input.charAt(i++));
+      chr1 = (enc1 << 2) | (enc2 >> 4);
+      chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+      chr3 = ((enc3 & 3) << 6) | enc4;
+
+      output = output + String.fromCharCode(chr1);
+      if (enc3 != 64)
+        output = output + String.fromCharCode(chr2);
+      if (enc4 != 64)
+        output = output + String.fromCharCode(chr3);
+    }
+    
+    output = Base64_._utf8_decode(output);
+    return output;
+  },
+
+  _utf8_encode: function(string) {
+    string = string.replace(re_win32ln_,"\n");
+    
+    var utftext = '';
+    for (var n = 0; n < string.length; n++) {
+      var c = string.charCodeAt(n);
+
+      if (c < 128)
+        utftext += String.fromCharCode(c);
+      else if(c > 127 && c < 2048) {
+        utftext += String.fromCharCode((c >> 6) | 192);
+        utftext += String.fromCharCode((c & 63) | 128);
+      }
+      else {
+        utftext += String.fromCharCode((c >> 12) | 224);
+        utftext += String.fromCharCode(((c >> 6) & 63) | 128);
+        utftext += String.fromCharCode((c & 63) | 128);
+      }
+    }
+    return utftext;
+  },
+
+  _utf8_decode: function(utftext) {
+    var i = 0, string = '';
+    var c = 0, c1 = 0, c2 = 0;
+    while ( i < utftext.length ) {
+      c = utftext.charCodeAt(i);
+      if (c < 128) {
+        string += String.fromCharCode(c);
+        i++;
+      }
+      else if(c > 191 && c < 224) {
+        c2 = utftext.charCodeAt(i+1);
+        string += String.fromCharCode(((c & 31) << 6) | (c2 & 63));
+        i += 2;
+      }
+      else {
+        c2 = utftext.charCodeAt(i+1);
+        c3 = utftext.charCodeAt(i+2);
+        string += String.fromCharCode(((c & 15) << 12) | ((c2 & 63) << 6) | (c3 & 63));
+        i += 3;
+      }
+    }
+    return string;
+  }
+};
 
 var containNode_      = null;
 var topmostWidget_    = null;
@@ -109,6 +210,9 @@ function keyOfNode_(node) {
 
 utils.keyOfNode = function(node) {
   return keyOfNode_(node);
+};
+utils.dragInfo = {
+  inDragging: false, justResized: false,
 };
 
 var identicalId_ = 4;    // 0,1,2 reserved
@@ -2805,8 +2909,21 @@ function triggerConnTo_(bConn,value,oldValue,sKey) {
   }
 }
 
-function dualFuncOfGetSet_(comp,attr,superSet,setFn) {
+function dualFuncOfGetSet_(comp,attr,superSet,setFn,baseDual) {
   var gui = comp.$gui, isId__ = attr == 'id__';
+  if (baseDual) {
+    if (isId__) {
+      baseDual = undefined;
+      console.log('error: can not apply base.setter to duals.id__');
+    }
+    else if (superSet)
+      baseDual.setter = superSet;
+    else {
+      baseDual.setter = function(value,oldValue) {
+        comp.state[attr] = value;
+      };
+    }
+  }
   return [getterFunc.bind(comp),setterFunc.bind(comp)];
   
   function getterFunc() {
@@ -2815,35 +2932,45 @@ function dualFuncOfGetSet_(comp,attr,superSet,setFn) {
   
   function setterFunc(value) {
     if (gui.inSync) {
-      var oldValue;
-      if (arguments.length >= 2)
+      var oldValue, isTop;
+      if (arguments.length >= 2) {
         oldValue = arguments[1];
+        isTop = false;
+      }
       else {  // is topmost level
         oldValue = this.state[attr];
         if (oldValue === value) return;   // if same to old, just ignore
+        isTop = true;
       }
       
       var triggerLsn = false;
-      if (isId__ && value <= 2) {
-        this.state[attr] = value;
-        gui.id__ = value;
-        if (setFn) setFn(value,oldValue); // not call superSet
-        triggerLsn = value != 0;
+      if (isId__ && value <= 2) {  // must not use baseDual (base.setter)
+        if (isTop)
+          this.state.id__ = gui.id__ = value; // if value > 2, setter will assign gui.id__
+        if (setFn) setFn(value,oldValue);     // not call superSet
+        triggerLsn = !superSet && value != 0;
       }
       else {
-        if (superSet)
-          superSet(value,oldValue);
-        else triggerLsn = true;
+        if (superSet) {
+          if (!baseDual) {
+            if (isTop) this.state[attr] = value;
+            superSet(value,oldValue);
+          }
+        }
+        else {
+          if (isTop && !baseDual)
+            this.state[attr] = value;
+          triggerLsn = true;
+        }
         if (setFn)
           setFn(value,oldValue);
-        else this.state[attr] = value;    // default direct assign
       }
       
       if (triggerLsn) {  // only trigger listen in inner-most setter-func // avoid trigger twice
         var bConn = gui.connectTo[attr];
         if (bConn && gui.compState >= 2) {  // not trigger when first render
           setTimeout( function() {
-            triggerConnTo_(bConn,value,oldValue,attr);
+            triggerConnTo_(bConn,comp.state[attr],oldValue,attr);
           },0);
         }
       }
@@ -2852,19 +2979,18 @@ function dualFuncOfGetSet_(comp,attr,superSet,setFn) {
       if (!this.state) {
         gui.initDuals.push([attr,value]);  // maybe undefine later, but used only when this.duals.attr exists
       }
-      else if (isId__ && value == 0) {
-        var oldValue = this.state[attr];
-        if (oldValue === 0) return;        // if same to old, just ignore
+      else if (isId__ && value == 0) {     // must not use base.setter
+        var oldValue = this.state.id__;
+        if (oldValue == 0) return;         // if same to old, just ignore
         
-        this.state[attr] = value;
-        gui.id__ = value;
+        this.state.id__ = gui.id__ = value;
         if (setFn) setFn(value,oldValue);  // no delay // not call superSet
       }
       else {
-        var thisObj = this, duals2 = this.state.duals.slice(0); // not remove exist attr // sometime not means 'replace' (but 'update') such as 'style'
-        duals2.push([attr,value]);              // update duals.attr in order
+        var duals2 = this.state.duals.slice(0); // not remove exist attr // sometime not means 'replace' (but 'update') such as 'style'
+        duals2.push([attr,value]);         // update duals.attr in order
         setTimeout( function() {
-          thisObj.setState({duals:duals2});
+          comp.setState({duals:duals2});
         },0); // maybe current in render(), set it in next tick
       }
     }
@@ -4304,11 +4430,11 @@ function propagateResizing_(comp,inPending) {
   var currWdgt = comp.widget;
   if (!currWdgt) return;
   
-  var wd = comp.cssWidth, hi = comp.cssHeight, pending = !!inPending;
+  var gui = comp.$gui, wd = gui.cssWidth, hi = gui.cssHeight, pending = !!inPending;
   if (typeof wd != 'number' && typeof hi != 'number') return; // both width and height is auto, ignore
   
   var newId = 0;
-  comp.$gui.comps.forEach(function(child) {
+  gui.comps.forEach(function(child) {
     if (!child) return;
     
     var sKey = getElementKey_(child);
@@ -5580,7 +5706,7 @@ function renewWidgetSpared_(comp,isForce,callback) {
   var currWgt = comp.widget;
   if (!currWgt) return doCallback();  // ignore if unmount
   
-  var changed = false, gui = comp.$gui, cssWd = comp.cssWidth, cssHi = comp.cssHeight;
+  var changed = false, gui = comp.$gui, cssWd = gui.cssWidth, cssHi = gui.cssHeight;
   var useSparedX = gui.useSparedX;
   if (useSparedX) {
     var iWd = getSparedPixel_(comp,currWgt,true,cssWd);  // cssWd maybe null
@@ -5831,7 +5957,7 @@ class TWidget_ {
     };
   }
   
-  defineDual(attr,setFn,initVal) {
+  defineDual(attr,setFn,initVal,base) {
     var duals = this.duals, gui = this.$gui;
     if (gui && gui.compState >= 2) {
       console.log('error: can not define duals.' + attr + ' after first render');
@@ -5842,22 +5968,32 @@ class TWidget_ {
     if (initVal !== undefined)
       gui.initDuals0.push([attr,initVal]);
     
-    var oldDesc = Object.getOwnPropertyDescriptor(duals,attr);
+    var bFn, oldDesc = Object.getOwnPropertyDescriptor(duals,attr), warnBase = false;
     if (!oldDesc) {
-      var bFn = dualFuncOfGetSet_(this,attr,null,setFn && setFn.bind(this));
+      if (setFn)
+        bFn = dualFuncOfGetSet_(this,attr,null,setFn.bind(this),base);
+      else {
+        if (base) warnBase = true;
+        bFn = dualFuncOfGetSet_(this,attr,null);
+      }
       Object.defineProperty(duals,attr, { enumerable:true, configurable:true,
         get:bFn[0], set:bFn[1],
       });
     }
-    else {  // oldDesc.set must defined
+    else {   // oldDesc.set must defined
       if (setFn) { // need embed setFn to oldDesc, but no duplicate trigger listen
-        var bFn = dualFuncOfGetSet_(this,attr,oldDesc.set,setFn.bind(this));
+        bFn = dualFuncOfGetSet_(this,attr,oldDesc.set,setFn.bind(this),base);
         Object.defineProperty(duals,attr, { enumerable:true, configurable:true,
           get:oldDesc.get, set:bFn[1],
         });
       }
-      // else, just reuse oldDesc
+      else { // just reuse oldDesc
+        if (base) warnBase = true;
+      }
     }
+    
+    if (warnBase)
+      console.log('warning: base.setter should use with setter.');
     return this;   // can write as: this.defineDual(attr1).defineDual(attr2)
   }
   
@@ -6098,7 +6234,7 @@ class TWidget_ {
       this.state.klass = value || '';
     });
     this.defineDual('style', function(value,oldValue) {
-      this.state.style = Object.assign({},oldValue,value); // no check style.position is absolute or not
+      this.state.style = Object.assign({},oldValue,value);
     });
     this.defineDual('left', function(value,oldValue) {
       this.state.left = isNaN(value)? null: value; // isNaN(null) is false
@@ -6249,7 +6385,7 @@ class TWidget_ {
     }
     
     // step 7: setup parentWidth, parentHeight, init topmost also
-    this.cssWidth = null; this.cssHeight = null; // null means auto, will set in prepareState()
+    gui.cssWidth = null; gui.cssHeight = null; // null means auto, will set in prepareState()
     var ownerWd = null, ownerHi = null;
     
     var hookThis = this.widget;
@@ -6333,8 +6469,8 @@ class TWidget_ {
       else {
         var ownerObj_ = owner.component;
         if (ownerObj_) {
-          ownerWd = ownerObj_.cssWidth;
-          ownerHi = ownerObj_.cssHeight;
+          ownerWd = ownerObj_.$gui.cssWidth;
+          ownerHi = ownerObj_.$gui.cssHeight;
         } // else, ownerWd = null, ownerHi = null, means 'auto'
       }
     }
@@ -6343,7 +6479,7 @@ class TWidget_ {
     
     // step 8: setup comps, compIdx
     this.defineDual('childNumId', function(newNumId,oldNumId) { // if no props.children, newNumId will be 0, setter will not called
-      this.state.childNumId = newNumId;
+      // this.state.childNumId = newNumId;  // must be auto assigned
       
       var thisObj = this;
       var hookThis = thisObj.widget;
@@ -7621,7 +7757,7 @@ class TWidget_ {
         cssWd = wd - iPadL - iPadR - iBrdL - iBrdR;
         if (cssWd < 0)
           cssWd = null; // wdChanged = false
-        else if (this.cssWidth !== cssWd)
+        else if (gui.cssWidth !== cssWd)
           wdChanged = true;
       }
     }  // else, take turning to auto as no resizing 
@@ -7648,7 +7784,7 @@ class TWidget_ {
         cssHi = hi - iPadT - iPadB - iBrdT - iBrdB;
         if (cssHi < 0)
           cssHi = null; // hiChanged = false
-        else if (this.cssHeight !== cssHi)
+        else if (gui.cssHeight !== cssHi)
           hiChanged = true;
       }
     }  // else, take turning to auto as no resizing
@@ -7657,8 +7793,8 @@ class TWidget_ {
     if (minHi) minHi = Math.max(0,minHi - iPadT - iPadB - iBrdT - iBrdB);
     if (maxHi) maxHi = Math.max(0,maxHi - iPadT - iPadB - iBrdT - iBrdB);
 
-    this.cssWidth = cssWd;   // null for 'auto'
-    this.cssHeight = cssHi;
+    gui.cssWidth = cssWd;   // null for 'auto'
+    gui.cssHeight = cssHi;
     
     var spareChanged = gui.respared;
     gui.respared = false;
@@ -7731,7 +7867,7 @@ T.Widget_ = TWidget_;
 
 function nodesDualFn_(value,oldValue) {
   if (!Array.isArray(value)) return;  // fatal error
-  this.state.nodes = value;
+  // this.state.nodes = value;        // must be auto assigned
   resetNodes(this,value,oldValue);    // old value must be array
   
   function resetNodes(comp,value,oldValue) {
@@ -8021,7 +8157,7 @@ class TSplitDiv_ extends TUnit_ {
           dState.maxHeight = dState.height;
         }
         if (this.props.width >= 1 && this.props.width <= 4)
-          dState.width = 0.9999; // 100%
+          dState.width = 0.9999;  // 100%
         if (this.props.minWidth === undefined)
           dState.minWidth = 10;   // default 10px
       }
@@ -8378,9 +8514,9 @@ class TGridPanel_ extends TPanel_ {
         if (gui.inRow) { // response to iX
           if (typeof iX == 'number' && iX >= 0) {
             if (iX < 1) {
-              if (typeof this.cssWidth != 'number')
+              if (typeof gui.cssWidth != 'number')
                 iX = null;
-              else iX = iX * this.cssWidth;
+              else iX = iX * gui.cssWidth;
             }
             var iFrom = idx % columnNum;
             bColumn[iFrom] = iX;  // iX maybe null that means auto
@@ -8417,7 +8553,7 @@ class TGridPanel_ extends TPanel_ {
                   if (typeof iOld == 'number' && iOld >= 0) {
                     var iMin = child.state.minHeight, iMax = child.state.maxHeight, iValue = iY;
                     if (typeof iY == 'number' && iY < 1)
-                      iValue = (typeof this.cssHeight != 'number')? null: iY*this.cssHeight;
+                      iValue = (typeof gui.cssHeight != 'number')? null: iY*gui.cssHeight;
                     if (iMin && (typeof iValue != 'number' || iValue < iMin))
                       iValue = iMin;
                     if (iMax && (typeof iValue != 'number' || iValue > iMax))
@@ -8432,9 +8568,9 @@ class TGridPanel_ extends TPanel_ {
         else { // response to iY
           if (typeof iY == 'number' && iY >= 0) {
             if (iY < 1) {
-              if (typeof this.cssHeight != 'number')
+              if (typeof gui.cssHeight != 'number')
                 iY = null;
-              else iY = iY * this.cssHeight;
+              else iY = iY * gui.cssHeight;
             }
             var iFrom = idx % columnNum;
             bColumn[iFrom] = iY;  // iY maybe null that means auto
@@ -8471,7 +8607,7 @@ class TGridPanel_ extends TPanel_ {
                   if (typeof iOld == 'number' && iOld >= 0) {
                     var iMin = child.state.minWidth, iMax = child.state.maxWidth, iValue = iX;
                     if (typeof iX == 'number' && iX < 1)
-                      iValue = (typeof this.cssWidth != 'number')? null: iX*this.cssWidth;
+                      iValue = (typeof gui.cssWidth != 'number')? null: iX*gui.cssWidth;
                     if (iMin && (typeof iValue != 'number' || iValue < iMin))
                       iValue = iMin;
                     if (iMax && (typeof iValue != 'number' || iValue > iMax))
@@ -8542,32 +8678,32 @@ class TTableRow_ extends TUnit_ {
   }
 
   render() { // no need call this.prepareState(), row's padding/border/margin is fixed to 0
-    var oldWd = this.cssWidth, oldHi = this.cssHeight;
+    var gui = this.$gui, oldWd = gui.cssWidth, oldHi = gui.cssHeight;
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
-    var cssWd = this.cssWidth = this.state.parentWidth; // fixed to parent size, child will read it
+    var cssWd = gui.cssWidth = this.state.parentWidth; // fixed to parent size, child will read it
     var wdAuto = (typeof cssWd != 'number') || cssWd < 0;
     var cssHi = this.state.parentHeight, hi = this.state.height, hiAuto = (typeof hi != 'number') || hi < 0;
     if (!hiAuto) {
       if (hi >= 1)
-        cssHi = this.cssHeight = hi;     // hiAuto = false
+        cssHi = gui.cssHeight = hi;     // hiAuto = false
       else {
         if (typeof cssHi == 'number') {
           if (hi >= 0.9999) {
-            this.cssHeight = cssHi;      // 100%, same as parent height
+            gui.cssHeight = cssHi;      // 100%, same as parent height
             if (typeof cssHi != 'number' || cssHi < 0)
               hiAuto = true;             // change hiAuto
           }
-          else cssHi = this.cssHeight = cssHi * hi;
+          else cssHi = gui.cssHeight = cssHi * hi;
         }
         else {
-          cssHi = this.cssHeight = null; // hi < 1 && parent_is_auto
+          cssHi = gui.cssHeight = null; // hi < 1 && parent_is_auto
           hiAuto = true;
         }
       }
     }
-    else cssHi = this.cssHeight = null;  // hiAuto = true
+    else cssHi = gui.cssHeight = null;  // hiAuto = true
     
     var wdChanged = oldWd !== cssWd, thisWdgt = this.widget;
     var bComp = this.$gui.comps, bChild = [];  // bChild record all td
@@ -8674,14 +8810,14 @@ class TTablePanel_ extends TPanel_ {
   }
   
   render() {
-    var oldWd = this.cssWidth, oldHi = this.cssHeight; // save old value to judge changing
+    var gui = this.$gui, oldWd = gui.cssWidth, oldHi = gui.cssHeight; // save old value to judge changing
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
     var bChild = this.prepareState();
     
     if (this.isHooked) {
-      if ((typeof this.cssWidth == 'number' && oldWd !== this.cssWidth) || (typeof this.cssHeight == 'number' && oldHi !== this.cssHeight) || utils.dragInfo.justResized) {
+      if ((typeof gui.cssWidth == 'number' && oldWd !== gui.cssWidth) || (typeof gui.cssHeight == 'number' && oldHi !== gui.cssHeight) || utils.dragInfo.justResized) {
         var self = this;
         setTimeout( function() { // TablePanel is unit like (not a panel), need customize resizing event
           propagateResizing_(self,utils.dragInfo.inDragging); // every TableRow will fire resizing
@@ -9800,7 +9936,7 @@ class TSpan_ extends TWidget_ {
     
     // step 6: setup comps, compIdx
     this.defineDual('childNumId', function(newNumId,oldNumId) { // if no props.children, newNumId will be 0, setter will not called
-      this.state.childNumId = newNumId;
+      // this.state.childNumId = newNumId;  // must be auto assigned
       
       var thisObj = this, hookThis = this.widget;
       if (!hookThis) return; // fatal error
@@ -11099,11 +11235,11 @@ class TNavPanel_ extends TPanel_ {
   }
   
   prepareState() {
-    var oldWd = this.cssWidth, oldHi = this.cssHeight;    
+    var gui = this.$gui, oldWd = gui.cssWidth, oldHi = gui.cssHeight;    
     var bChild = super.prepareState();
     
-    if (!this.$gui.isPanel && this.isHooked) { // pass resizing for Unit-like widget (TNavDiv_)
-      if ((typeof this.cssWidth == 'number' && oldWd !== this.cssWidth) || (typeof this.cssHeight == 'number' && oldHi !== this.cssHeight) || utils.dragInfo.justResized) {
+    if (!gui.isPanel && this.isHooked) { // pass resizing for Unit-like widget (TNavDiv_)
+      if ((typeof gui.cssWidth == 'number' && oldWd !== gui.cssWidth) || (typeof gui.cssHeight == 'number' && oldHi !== gui.cssHeight) || utils.dragInfo.justResized) {
         var self = this;
         setTimeout(function() {
           propagateResizing_(self,utils.dragInfo.inDragging);
@@ -12963,9 +13099,7 @@ class TMarkedDiv_ extends TDiv_ {
     });
     
     state.nodes = [];  // preset it, should avoid first assignment
-    this.defineDual('nodes', function(value,oldValue) {
-      this.state.nodes = value;
-    }); // should not come from props.nodes  // come from 'html.' scanning
+    this.defineDual('nodes'); // should not come from props.nodes  // come from 'html.' scanning
     
     return state;
     
@@ -12985,7 +13119,12 @@ class TMarkedDiv_ extends TDiv_ {
   }
   
   willResizing(wd,hi,inPending) { // called by parent in next render tick
-    propagateResizing_(this,inPending);
+    if (!inPending && this.isHooked) {  // ignore pending state of dragging
+      var self = this;
+      setTimeout( function() {
+        propagateResizing_(self,false);
+      },0);      // let 'this.setState({parentWidth,parentHeight})' run first
+    }
     return true; // true means contine run this.setState({parentWidth,parentHeight})
   }
   

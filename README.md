@@ -6,13 +6,13 @@ suports visual progaming also.
 
 ### Version state
 
-Current version: Beta 0.0.5   
+Current version: Beta 0.0.6   
 Document state: Only chinese manual is ready
 
 ### Install
 
 ```
-md user
+mkdir user
 cd user
 git clone https://github.com/rewgt/shadow-server.git
 ```

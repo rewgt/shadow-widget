@@ -1,4 +1,4 @@
-// shadow-widget cdn ver 0.0.5
+// shadow-widget cdn ver 0.0.6
 // for cdn package of shadow-widget, exclude react & react-dom
 // package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ es2015 react ] ]
 
@@ -1774,6 +1774,28 @@ W.$ex.regist('update', update_);
 }).call(utils);
 //------- end of chjj/marked --------
 
+var re_plain_ = /^(?:plain|text)$/i;
+var re_html_ = /^(?:xml|html|xhtml|rss|atom|xjb|xsd|xsl|plist|markdown|md|mkdown|mkd)$/i;
+var re_lt_ = /&lt;/g,
+    re_gt_ = /&gt;/g,
+    re_amp_ = /&amp;/g;
+
+(function (hljs) {
+  if (!hljs || !hljs.highlight) return;
+
+  utils.marked.setOptions({
+    highlight: function highlight(code, sTag) {
+      var isHtml = false;
+      if (sTag) {
+        if (sTag.search(re_plain_) == 0) sTag = 'plain';else if (sTag.search(re_html_) == 0) isHtml = true;
+      } else sTag = 'plain';
+
+      if (sTag == 'plain' || !isHtml) code = code.replace(re_lt_, '<').replace(re_gt_, '>').replace(re_amp_, '&');
+      if (sTag == 'plain') return code;else return hljs.highlight(sTag, code, true).value;
+    }
+  });
+})(window.hljs); // fix to cdn version of highlight.js
+
 // inline jsonp/ajax process
 //--------------------------
 (function () {
@@ -1888,7 +1910,7 @@ W.$ex.regist('update', update_);
         var resText = xmlHttp.responseText || '';
         var statusText = xmlHttp.statusText || '',
             status = xmlHttp.status || (resText ? 200 : 404);
-        if (status == 200 && resText) {
+        if (status >= 200 && status < 300 && resText) {
           var isPre = false;
           if (dataType === 'json' || dataType === 'pre-json' && (isPre = true)) {
             // take as json
@@ -2347,7 +2369,7 @@ var idSetter = W.$idSetter,
     creator = W.$creator;
 
 utils.version = function () {
-  return '0.0.5';
+  return '0.0.6';
 };
 
 var vendorId_ = function (sUA) {
@@ -2429,7 +2451,7 @@ var Base64_ = utils.Base64 = {
   },
 
   _utf8_encode: function _utf8_encode(string) {
-    string = string.replace(re_win32ln_, "\n");
+    string = string.replace(re_win32ln_, '\n');
 
     var utftext = '';
     for (var n = 0; n < string.length; n++) {
@@ -5372,6 +5394,7 @@ function syncProps_(comp) {
       var exprDualSetter = {};
       var dualAttrList = Object.keys(gui.dualAttrs);
       if (bExpr0.length || dualAttrList.length || gui.tagAttrs.length || gui.dataset.length) {
+        var iRmvData_ = -1;
         var b = [bExpr0, dualAttrList, gui.tagAttrs, gui.dataset];
         for (var i = 0, bAttr; bAttr = b[i]; i++) {
           bAttr.forEach(function (sKey) {
@@ -5404,7 +5427,12 @@ function syncProps_(comp) {
               } else comp.state[sKey] = value_;
             } else {
               // tagAttr, dataset
-              if (dHasDual[sKey]) return; // if define duals for tagAttr/dataset, you should handover its props init
+              if (dHasDual[sKey]) {
+                if (i == 2 && sKey == 'data') // from gui.tagAttrs, and has duals.data
+                  iRmvData_ = gui.tagAttrs.indexOf(sKey);
+                return; // if define duals for tagAttr/dataset, you should handover its props init
+              }
+
               dHasDual[sKey] = true;
               var value_ = duals0[sKey] = comp.props[sKey];
               if (duals.hasOwnProperty(sKey)) {
@@ -5425,6 +5453,7 @@ function syncProps_(comp) {
             }
           });
         }
+        if (iRmvData_ >= 0) gui.tagAttrs.splice(iRmvData_, 1); // not take props.data as string
       }
 
       var ownerWdgt;
@@ -6333,7 +6362,8 @@ function staticDbClick(event) {
   while (staticNode) {
     if (staticNode === tillNode) break;
     if (staticNode.classList.contains('rewgt-static')) {
-      sName = staticNode.getAttribute('name'); // static-node id
+      if (!staticNode.getAttribute('data-marked')) // avoid design editing 
+        sName = staticNode.getAttribute('name'); // static-node id
       break;
     }
     staticNode = staticNode.parentNode;
@@ -6635,7 +6665,7 @@ utils.loadElementEx = function (sPrefix) {
 
 utils.setVendorLib = function (sName, callback) {
   var body = topmostWidget_ && topmostWidget_.component;
-  if (!body || !sName || !callback) return null; // fatal error
+  if (!body || !sName || !callback) return; // fatal error
 
   var ret = null;
   function doCallback(registIt) {
@@ -7275,7 +7305,7 @@ function loadReference_(entry, keyName, callback) {
 
     // step 4, replace ref node
     gui.comps[compIdx] = React.cloneElement(targ, dProp); // replace link widget
-    entry.reRender(callback);
+    entry.setState({ id__: identicalId() }, callback); // can not use reRender() since entry.isHooked can be false
   }
 
   function getComponent(widget, sPath, sPath_, isTemplate, sPrefix) {
@@ -9022,7 +9052,7 @@ var TWidget_ = function () {
           this.setState(data2, callback);
         }
       } else {
-        if (data) console.log('warning: reRender() failed when component unavailable.');
+        console.log('warning: reRender() failed when component unhooked.');
         if (callback) callback();
       }
     }
@@ -11189,9 +11219,9 @@ var TTablePanel_ = function (_TPanel_2) {
             dEmpty2 = { style: { margin: '2px' } },
             bTmp = [];
         for (var i = 0; i < iNeedCol; i += 1) {
-          bTmp.push(React.createElement('td', { key: i + '' }, React.createElement('div', i == 0 ? dEmpty : dEmpty2)));
+          bTmp.push(React.createElement('td', { key: i + '', style: { backgroundColor: '#eee' } }, React.createElement('div', i == 0 ? dEmpty : dEmpty2)));
         }
-        bChild.push(React.createElement('tr', { key: '$end', title: 'end of TablePanel', style: { backgroundColor: '#eee', height: '10px' } }, bTmp));
+        bChild.push(React.createElement('tr', { key: '$end', title: 'end of TablePanel', style: { height: '10px' } }, bTmp));
       }
 
       var tBody = React.createElement('tbody', null, bChild);
@@ -12963,6 +12993,39 @@ var TAbbr_ = function (_TSpan_5) {
 T.Abbr_ = TAbbr_;
 T.Abbr = new TAbbr_();
 
+function addStepFunc_(comp) {
+  comp.stepPlay = function (fSpeed) {
+    // not use fSpeed
+    if (this.isHooked) {
+      var node = ReactDOM.findDOMNode(this);
+      if (node && node.readyState >= 2) {
+        // 2: HAVE_CURRENT_DATA
+        node.play();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  comp.stepPause = function (sReason) {
+    // sReason: JUMP_PAGE,NEXT_PAGE,PRE_STEP,POST_STEP
+    if (this.isHooked) {
+      var node = ReactDOM.findDOMNode(this);
+      if (node) {
+        if (!node.paused) node.pause();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  comp.stepIsDone = function () {
+    if (!this.isHooked) return true;
+    var node = ReactDOM.findDOMNode(this);
+    return !node || node.readyState < 2 || node.paused;
+  };
+}
+
 var TAudio_ = function (_TSpan_6) {
   _inherits(TAudio_, _TSpan_6);
 
@@ -12978,7 +13041,7 @@ var TAudio_ = function (_TSpan_6) {
       iLevel = iLevel || 1200;
       var dSchema = _get(TAudio_.prototype.__proto__ || Object.getPrototypeOf(TAudio_.prototype), '_getSchema', this).call(this, self, iLevel + 200);
       dSchema.src = [iLevel + 1, 'string', null];
-      dSchema.autoplay = [iLevel + 2, 'string', ['', 'autoplay']];
+      dSchema.autoPlay = [iLevel + 2, 'string', ['', 'autoplay']];
       dSchema.controls = [iLevel + 3, 'string', ['', 'controls']];
       dSchema.loop = [iLevel + 4, 'string', ['', 'loop']];
       dSchema.muted = [iLevel + 5, 'string', ['', 'muted']];
@@ -12991,6 +13054,13 @@ var TAudio_ = function (_TSpan_6) {
       var props = _get(TAudio_.prototype.__proto__ || Object.getPrototypeOf(TAudio_.prototype), 'getDefaultProps', this).call(this);
       props['tagName.'] = 'audio';
       return props;
+    }
+  }, {
+    key: 'getInitialState',
+    value: function getInitialState() {
+      var dState = _get(TAudio_.prototype.__proto__ || Object.getPrototypeOf(TAudio_.prototype), 'getInitialState', this).call(this);
+      addStepFunc_(this);
+      return dState;
     }
   }]);
 
@@ -13310,6 +13380,13 @@ var TVideo_ = function (_TSpan_18) {
       var props = _get(TVideo_.prototype.__proto__ || Object.getPrototypeOf(TVideo_.prototype), 'getDefaultProps', this).call(this);
       props['tagName.'] = 'video';
       return props;
+    }
+  }, {
+    key: 'getInitialState',
+    value: function getInitialState() {
+      var dState = _get(TVideo_.prototype.__proto__ || Object.getPrototypeOf(TVideo_.prototype), 'getInitialState', this).call(this);
+      addStepFunc_(this);
+      return dState;
     }
   }]);
 
@@ -16017,7 +16094,8 @@ var TScenePage_ = function (_TPanel_6) {
         var iLevel = parseInt(childObj.state.style.zIndex) || 0;
         if (isSelect) {
           // set to topmost
-          if (iLevel >= -999 && iLevel <= 999) childObj.setState({ style: Object.assign({}, childObj.state.style, { zIndex: iLevel + 2000 }) });
+          if (iLevel >= -997 && iLevel <= 999) // not change -999 (to 1001) -998 (to 1000), take it as background
+            childObj.setState({ style: Object.assign({}, childObj.state.style, { zIndex: iLevel + 2000 }) });
         } else {
           // restore to normal
           if (iLevel >= 1000 && iLevel <= 2999) childObj.setState({ style: Object.assign({}, childObj.state.style, { zIndex: iLevel - 2000 }) });
@@ -16250,15 +16328,18 @@ var MaskPanel__ = React.createClass(new TMaskPanel_()._extend());
 // MarkedDiv
 //----------
 var SHADOW_WTC_FLAGS_ = null; // used only in __design__
+var SHADOW_WTC_ISPRE_ = null; // used only in __design__
+
 function shadowWtcTagFlag_() {
   if (!SHADOW_WTC_FLAGS_) {
     // not initialized yet
     SHADOW_WTC_FLAGS_ = {};
-    scanOneLevel(SHADOW_WTC_FLAGS_, T, '');
+    SHADOW_WTC_ISPRE_ = {};
+    scanOneLevel(T, '');
   }
-  return SHADOW_WTC_FLAGS_;
+  return [SHADOW_WTC_FLAGS_, SHADOW_WTC_ISPRE_];
 
-  function scanOneLevel(dRet, aSet, sPath) {
+  function scanOneLevel(aSet, sPath) {
     Object.keys(aSet).forEach(function (sKey) {
       if (!sKey || sKey[sKey.length - 1] == '_') return;
       var value = aSet[sKey];
@@ -16272,8 +16353,9 @@ function shadowWtcTagFlag_() {
         }
         // else iFlag = 1; // Panel(0) or Unit(1), take all of them as Unit
         if (iFlag != 3) // no need regist Span(3), default is 3
-          dRet[sPath + sKey] = iFlag;
-      } else scanOneLevel(dRet, value, sPath + sKey + '.'); // scan sub-level
+          SHADOW_WTC_FLAGS_[sPath + sKey] = iFlag;
+        if (props['isPre.']) SHADOW_WTC_ISPRE_[sPath + sKey] = true;
+      } else scanOneLevel(value, sPath + sKey + '.'); // scan sub-level
     });
   }
 }
@@ -16395,7 +16477,7 @@ function renewMarkdown_(compObj, mdText, callback) {
           }
 
           var bChild_ = [];
-          if (sTag == 'DIV') // ignore sub node of <pre>
+          if (sTag == 'DIV') // ignore sub node of <pre>, we only using node.innerHTML for that
             bChild_ = scanPreCode(node, '[' + i + '].' + sTemplate);
           if (childCls) {
             bChild_.unshift(childCls, childProp);
@@ -16449,13 +16531,21 @@ function renewMarkdown_(compObj, mdText, callback) {
     }
 
     function scanPreCode(htmlNode, sPrefix) {
-      var bRet = [];
+      var bRet = [],
+          bStatic = [];
       for (var i = 0, node; node = htmlNode.children[i]; i++) {
         var bInfo = creator.scanNodeAttr(node, sPrefix, i);
-        if (!bInfo) continue; // ignore all none '$=xx' node
+        if (!bInfo) {
+          if (node.classList.contains('rewgt-static')) {
+            for (var i2 = 0, node2; node2 = node.childNodes[i2]; i2++) {
+              bStatic.push(node2); // includes text node
+            }
+          } else bStatic.push(node);
+          continue; // ignore all none '$=xx' node
+        }
+
         var sTemplate = bInfo[0],
             dProp = bInfo[1];
-
         if (sTemplate == 'RefDiv') bRet.push(React.createElement(RefDiv__, dProp));else if (sTemplate == 'RefSpan') bRet.push(React.createElement(RefSpan__, dProp));else {
           // is WTC
           var ch,
@@ -16484,6 +16574,11 @@ function renewMarkdown_(compObj, mdText, callback) {
         }
       }
 
+      if (bRet.length == 0 && bStatic.length) {
+        // no need set 'hasStatic.', scaned from MarkedDiv node
+        var idx = W.$staticNodes.push(bStatic) - 1; // use W.$staticNodes, not local
+        bRet.push(React.createElement('div', { className: 'rewgt-static', name: idx + '', 'data-marked': '1' })); // use data-marked to avoid online editing
+      }
       return bRet;
     }
   }

@@ -1827,6 +1827,33 @@ this.marked = marked;  // regist as W.$utils.marked
 }).call(utils);
 //------- end of chjj/marked --------
 
+var re_plain_ = /^(?:plain|text)$/i;
+var re_html_ = /^(?:xml|html|xhtml|rss|atom|xjb|xsd|xsl|plist|markdown|md|mkdown|mkd)$/i;
+var re_lt_ = /&lt;/g, re_gt_ = /&gt;/g, re_amp_ = /&amp;/g;
+
+( function(hljs) {
+  if (!hljs || !hljs.highlight) return;
+  
+  utils.marked.setOptions( {
+    highlight: function (code,sTag) {
+      var isHtml = false;
+      if (sTag) {
+        if (sTag.search(re_plain_) == 0)
+          sTag = 'plain';
+        else if (sTag.search(re_html_) == 0)
+          isHtml = true;
+      }
+      else sTag = 'plain';
+      
+      if (sTag == 'plain' || !isHtml)
+        code = code.replace(re_lt_,'<').replace(re_gt_,'>').replace(re_amp_,'&');
+      if (sTag == 'plain')
+        return code;
+      else return hljs.highlight(sTag,code,true).value;
+    }
+  });
+})(window.hljs);  // fix to cdn version of highlight.js
+
 // inline jsonp/ajax process
 //--------------------------
 (function() {
@@ -1949,7 +1976,7 @@ function ajax(req) {
       
       var resText = xmlHttp.responseText || '';
       var statusText = xmlHttp.statusText || '', status = xmlHttp.status || (resText?200:404);
-      if (status == 200 && resText) {
+      if ((status >= 200 && status < 300) && resText) {
         var isPre = false;
         if (dataType === 'json' || (dataType === 'pre-json' && (isPre=true))) { // take as json
           var jsonData, isErr = true;

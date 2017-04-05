@@ -1972,11 +1972,11 @@ function ajax(req) {
   
   xmlHttp.onreadystatechange = function() {
     if (xmlHttp.readyState == 4) { // 4 is "loaded"
-      finished = true;
-      
       var resText = xmlHttp.responseText || '';
       var statusText = xmlHttp.statusText || '', status = xmlHttp.status || (resText?200:404);
-      if ((status >= 200 && status < 300) && resText) {
+      if (finished)
+        ;  // do nothing
+      else if ((status >= 200 && status < 300) && resText) {
         var isPre = false;
         if (dataType === 'json' || (dataType === 'pre-json' && (isPre=true))) { // take as json
           var jsonData, isErr = true;
@@ -2008,6 +2008,7 @@ function ajax(req) {
           req.error(xmlHttp,statusText);
       }
       xmlHttp = null;
+      finished = true;
     }
   };
   
@@ -2027,10 +2028,11 @@ function ajax(req) {
   if (typeof iTimeout == 'number') {
     setTimeout( function() {
       if (!finished) {
+        finished = true;
         xmlHttp.abort();
         if (req.error)
           req.error(xmlHttp,'request timeout');
-        xmlHttp = null;              
+        xmlHttp = null;
       }
     },iTimeout);
   }
@@ -2341,9 +2343,9 @@ utils.loadingEntry = function(require,module,exports) {
       }
     }
     
-    function makeReactComp(bNode) {
+    function makeReactComp(bNode,parentHasNum) {
       var tempName = bNode[0], sPath = bNode[3];
-      var noDotNum = (sPath && sPath.search(_dotNumPattern) < 0);  // no .Number
+      var noDotNum = (!parentHasNum && sPath && sPath.search(_dotNumPattern) < 0);  // no .Number
       var temp = loadTemplate(tempName,sPath,noDotNum);
       if (!temp) return null;
       
@@ -2352,12 +2354,12 @@ utils.loadingEntry = function(require,module,exports) {
         var dInitProp = dataSource[sPath];
         if (dInitProp) Object.assign(dProp,dInitProp);
       }
-      var bArgs = [temp,dProp], hasStatic = false;
+      var bArgs = [temp,dProp], hasStatic = false, parentHasNum_ = !noDotNum;
       
       for (var i=0; i < iNum; i++) {
         var item = bChild[i];
         if (Array.isArray(item)) {  // assert(item.length >= 4)
-          var child = makeReactComp(item);
+          var child = makeReactComp(item,parentHasNum_);
           if (child) bArgs.push(child);
         }
         else {  // item is static html node
@@ -2392,7 +2394,7 @@ utils.loadingEntry = function(require,module,exports) {
     var container = document.getElementById('react-container');
     var bJsxNode = scanJsxNode(container);
     if (bJsxNode) {
-      var bodyEle = makeReactComp(bJsxNode);
+      var bodyEle = makeReactComp(bJsxNode,false);
       if (bodyEle) {
         W.$cachedClass = dTemplate;
         ReactDOM.render(bodyEle,container, function() {

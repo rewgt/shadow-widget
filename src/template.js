@@ -7,8 +7,21 @@ var W = require('./react_widget');
 var T = W.$templates, utils = W.$utils, ex = W.$ex;
 var idSetter = W.$idSetter, creator = W.$creator;
 
+( function(loc) {
+  var b = loc.pathname.split('/');
+  if (!b[0]) b.shift();
+  creator.repoName = b.shift() || '';
+  
+  var sName = loc.hostname;
+  creator.isLocal  = sName == 'localhost' || sName == '127.0.0.1';
+  creator.isGithub = sName.indexOf('.github.io') > 0;
+  creator.appBase  = function() {
+    return '/app/files/rewgt/web';
+  };
+})(window.location);
+
 utils.version = function() {
-  return '0.0.6';
+  return '0.1.0';
 };
 
 var vendorId_ = (function(sUA) {
@@ -42,7 +55,6 @@ var vendorId_ = (function(sUA) {
 utils.vendorId = vendorId_;
 
 var re_decode64_ = /[^A-Za-z0-9\+\/\=]/g;
-var re_win32ln_  = /\r\n/g;
 var base64Key_   = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
 
 var Base64_ = utils.Base64 = {
@@ -97,7 +109,7 @@ var Base64_ = utils.Base64 = {
   },
 
   _utf8_encode: function(string) {
-    string = string.replace(re_win32ln_,'\n');
+    // string = string.replace(/\r\n/g,'\n');   // not replace win32 '\r\n'
     
     var utftext = '';
     for (var n = 0; n < string.length; n++) {
@@ -119,15 +131,14 @@ var Base64_ = utils.Base64 = {
   },
 
   _utf8_decode: function(utftext) {
-    var i = 0, string = '';
-    var c = 0, c1 = 0, c2 = 0;
+    var c,c2,c3, i = 0, string = '';
     while ( i < utftext.length ) {
       c = utftext.charCodeAt(i);
       if (c < 128) {
         string += String.fromCharCode(c);
         i++;
       }
-      else if(c > 191 && c < 224) {
+      else if (c > 191 && c < 224) {
         c2 = utftext.charCodeAt(i+1);
         string += String.fromCharCode(((c & 31) << 6) | (c2 & 63));
         i += 2;
@@ -154,6 +165,11 @@ var splitterMouseDn_  = false;
 
 var internalDomKey_   = '';
 var getKeyFromNode_   = null;
+
+var findDomNode_  = ReactDOM.findDOMNode;
+var reactClone_   = React.cloneElement;
+var reactCreate_  = React.createElement;
+var children2Arr_ = React.Children.toArray;
 
 var ReferenceProps_ = { '$': true, styles: true,
   'tagName.': true, 'isReference.': true, 'hookTo.': true,
@@ -294,9 +310,8 @@ function removeClass_(sClsName, cls) {
   return s.trim();
 }
 
-utils.removeClass = function(comp, cls, bAdd) {
-  var sKlass = comp.state.klass || '';
-  var s1 = ' ' + (comp.$gui.className || ''), i1 = s1.length;
+function removeCls_(sClass,sKlass,cls,bAdd) {
+  var s1 = ' ' + sClass, i1 = s1.length;
   var s2 = s1 + ' ' + sKlass + ' ';
   
   var bCls = Array.isArray(cls) ? cls: String(cls).split(/ +/);
@@ -319,9 +334,14 @@ utils.removeClass = function(comp, cls, bAdd) {
     }
   }
   
-  var s3 = s2.slice(i1).trim();
-  if (sKlass !== s3) {
-    comp.duals.klass = s3;
+  return s2.slice(i1).trim();
+}
+
+utils.removeClass = function(comp, cls, bAdd) {
+  var sKlass = comp.state.klass || '';
+  var sNew = removeCls_(comp.$gui.className || '',sKlass,cls,bAdd);
+  if (sKlass !== sNew) {
+    comp.duals.klass = sNew;
     return true;  // changed
   }
   return false;   // not changed
@@ -349,8 +369,8 @@ utils.setClass = setClass_;
 
 var S123456_ = ['S1','S2','S3','S4','S5','S6'];
 
-utils.mergeClass = function(comp, cls) {
-  var bCls = Array.isArray(cls) ? cls: String(cls).split(/ +/);
+function analyseMerge_(cls) {
+  var bCls = Array.isArray(cls)? cls: String(cls).split(/ +/);
   var bRmv = [], bAdd = [];
   for (var i = bCls.length - 1; i >= 0; i--) {
     var sCls = bCls[i];
@@ -375,17 +395,25 @@ utils.mergeClass = function(comp, cls) {
       bAdd.push(sCls);
     }
   }
-  
+  return [bRmv,bAdd];
+}
+
+creator.mergeClass = function(sClass,sKlass,sKlassNew) { // sKlassNew merge into sKlass
+  var b = analyseMerge_(sKlassNew), bRmv = b[0], bAdd = b[1];
+  return removeCls_(sClass,sKlass,bRmv,bAdd);
+};
+
+utils.mergeClass = function(comp,cls) {
+  var b = analyseMerge_(cls), bRmv = b[0], bAdd = b[1];
   return utils.removeClass(comp,bRmv,bAdd);
 };
 
+var re_react_key_ = /^(\.\$)+/g;
+
 function getElementKey_(child) {
-  var s = child.key || '';
-  if (s[0] == '.') {
-    if (s[1] == '$')
-      return s.slice(2);
-    else return s.slice(1);
-  }
+  var s = (child.key || '').replace(re_react_key_,'');
+  if (s[0] == '.')
+    return s.slice(1);
   else return s;
 }
 utils.keyOfElement = getElementKey_;
@@ -601,7 +629,7 @@ utils.setChildren = function(comp,children,callback) {
     if (Array.isArray(item))
       loadReactTreeEx_(bChild, item, W.$staticNodes, W.$cachedClass);
     else if (typeof item == 'string')
-      bChild.push(React.createElement(comp.props['childInline.']?Span__:P__,{'html.':item})); // item maybe ''
+      bChild.push(reactCreate_(comp.props['childInline.']?Span__:P__,{'html.':item})); // item maybe ''
     else if (React.isValidElement(item))
       bChild.push(item);
     // else, unknown format, ignore it
@@ -628,7 +656,7 @@ utils.setChildren = function(comp,children,callback) {
       return; // ignore clone, change removeNum wait to rescan that will clone 'keyid.'
     }
     
-    bChild[idx] = React.cloneElement(item,{'keyid.':keyid,key:sKey});
+    bChild[idx] = reactClone_(item,{'keyid.':keyid,key:sKey});
   });
   
   // gui.removeNum only can increase, can not decrease
@@ -3360,7 +3388,7 @@ function syncProps_(comp) {
               var ele, keyid = 'static-' + idx, dProp = Object.assign({},child.props);
               dProp['keyid.'] = keyid; dProp.key = keyid; // no 'hookTo.' for static node
               // if div.rewgt-static --> span.rewgt-static
-              newCompIdx[keyid] = newComps.push(React.createElement(childInline?'span':'div',dProp)) - 1;
+              newCompIdx[keyid] = newComps.push(reactCreate_(childInline?'span':'div',dProp)) - 1;
             }
             else {
               var childInline2 = child.props['childInline.'];
@@ -3401,8 +3429,12 @@ function syncProps_(comp) {
               }
               
               if (succ) {
-                var childProp = {'hookTo.':ownerWdgt,'keyid.':keyid,key:keyid+'','for.index':idx};
-                var childEle = forChild? React.cloneElement(child,childProp,forChild): React.cloneElement(child,childProp);
+                var childEle, childProp = {'hookTo.':ownerWdgt,'keyid.':keyid,key:keyid+'','for.index':idx};
+                if (forChild) {
+                  forChild.unshift(child,childProp);
+                  childEle = reactClone_.apply(null,forChild);
+                }
+                else childEle = reactClone_(child,childProp);
                 newCompIdx[keyid] = newComps.push(childEle) - 1;
               }
               // else, just ignore
@@ -3452,7 +3484,7 @@ function syncProps_(comp) {
     if (gui.isChildExpr && gui.children2 !== comp.props.children) {
       gui.removeNum += gui.comps.length;    // wait to rescan in duals.childNumId
       gui.children2 = comp.props.children;
-      gui.comps = React.Children.toArray(comp.props.children);
+      gui.comps = children2Arr_(comp.props.children);
     }
     duals.childNumId = gui.comps.length + (gui.removeNum << 16);
   }
@@ -3533,7 +3565,7 @@ utils.popWin = {
       oldChecked = optComp.state['data-checked'];
     
     // ele should come from template or compObj.fullClone()
-    popObj.setChild(React.createElement(MaskPanel__,{popOption:popOption, popFrame:popFrame},ele), function() {
+    popObj.setChild(reactCreate_(MaskPanel__,{popOption:popOption, popFrame:popFrame},ele), function() {
       if (W.__design__) {
         if (containNode_ && containNode_.setDesignModal)
           containNode_.setDesignModal(true);
@@ -3636,15 +3668,9 @@ function getCompRenewProp_(oneObj) {
   var hasHtmlTxt = template._htmlText;
   var props = Object.assign({},oneObj.props);
   
-  oneObj.$gui.dataset.forEach( function(item) {
-    var value = oneObj.state[item];
-    if (value !== undefined)
-      props[item] = value;  // take all data-xx aria-xx as stated props
-  });
   bStated.forEach( function(item) {
-    var value = oneObj.state[item];
-    if (value !== undefined)
-      props[item] = value;
+    if (props.hasOwnProperty(item))
+      props[item] = oneObj.state[item];
   });
   bSilent.forEach( function(item) {
     delete props[item];
@@ -3667,7 +3693,7 @@ function getCompRenewProp_(oneObj) {
 creator.getCompRenewProp = getCompRenewProp_;
 
 function deepCloneReactEle_(srcEle,dProp,compWdgt,compObj) { // compObj must not a linker
-  // return React.cloneElement(srcEle,dProp);  // can not directly clone
+  // return reactClone_(srcEle,dProp);  // can not directly clone
   
   var gui = compObj.$gui, hasFor = !!gui.forExpr;
   var bComp = hasFor?gui.comps2:gui.comps, bArgs = [];
@@ -3700,7 +3726,7 @@ function deepCloneReactEle_(srcEle,dProp,compWdgt,compObj) { // compObj must not
       }
       // else, reuse W.$staticNodes[idx]; // no change
       
-      bArgs.push(React.createElement(childInline?'span':'div',props));
+      bArgs.push(reactCreate_(childInline?'span':'div',props));
       return;
     }
     
@@ -3711,7 +3737,7 @@ function deepCloneReactEle_(srcEle,dProp,compWdgt,compObj) { // compObj must not
     if (subObj.props['isTemplate.'] && !W.__design__) {
       var tempObj = subObj.$gui.template;
       if (tempObj instanceof templateNode)
-        return React.cloneElement(child,{template:tempObj},null);
+        return reactClone_(child,{template:tempObj},null);
       else return; // invalid template
     }
     
@@ -3722,11 +3748,11 @@ function deepCloneReactEle_(srcEle,dProp,compWdgt,compObj) { // compObj must not
   });
   
   if (bArgs.length == 0)
-    return React.cloneElement(srcEle,dProp,null);
+    return reactClone_(srcEle,dProp,null);
   else {
     bArgs.unshift(dProp);
     bArgs.unshift(srcEle);
-    return React.cloneElement.apply(null,bArgs);
+    return reactClone_.apply(null,bArgs);
   }
 }
 creator.deepCloneReactEle = deepCloneReactEle_;
@@ -3810,6 +3836,16 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
       }
       // else, not string, dProp.key removed
       
+      var shadowTemp = getWidgetTempInfo(compObj._);
+      var bStated = shadowTemp[1], bSilent = shadowTemp[2];
+      bStated.forEach( function(item) {
+        if (dProp.hasOwnProperty(item))
+          dProp[item] = objState[item];
+      });
+      bSilent.forEach( function(item) {
+        delete dProp[item];
+      });
+      
       Object.keys(dProp).forEach( function(item) {  // includes 'isPre.'
         if (dProp[item] === undefined)
           delete dProp[item];  // remove all 'undefined' value
@@ -3845,15 +3881,9 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
     }
     
     Object.assign(dProp,compObj.props);
-    objGui.dataset.forEach( function(item) { // take data-* aria-* as stated props
-      var value = objState[item];
-      if (value !== undefined)
-        dProp[item] = value;
-    });
-    bStated.forEach( function(item) {
-      var value = objState[item];
-      if (value !== undefined)
-        dProp[item] = value;
+    bStated.forEach( function(item) {  // NOT take data-* aria-* as stated props
+      if (dProp.hasOwnProperty(item))
+        dProp[item] = objState[item];
     });
     bSilent.forEach( function(item) {
       delete dProp[item];
@@ -3916,7 +3946,7 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
         else {
           if (hasClass_(child.props.className,'rewgt-static')) {
             if (!compNode)
-              compNode = ReactDOM.findDOMNode(compObj);
+              compNode = findDomNode_(compObj);
             var sName = child.props.name, bHtml = [];
             if (compNode && sName) {
               var node = compNode.querySelector('.rewgt-static[name="' + sName + '"]');
@@ -4080,7 +4110,7 @@ function staticDbClick(event) {
   var wdgt = this.widget;  // 'this' should be owner component
   var sPath = wdgt && wdgt.getPath();
   if (!sPath) return;
-  var tillNode = ReactDOM.findDOMNode(this);
+  var tillNode = findDomNode_(this);
   if (!tillNode) return;
   
   var sName = '', staticNode = event.target;
@@ -4101,7 +4131,7 @@ function staticDbClick(event) {
   popDesigner_(staticNode,'default', {
     name: 'default',
     title: 'edit content',
-    url: '/app/files/rewgt/web/edit_static.html', halfScreen: true,
+    url: creator.appBase() + '/edit_static.html', halfScreen: true,
     // icon: '', noMove: false,
     // left: 0.05, top: 0.05,
     width: 0.96,
@@ -4120,7 +4150,7 @@ function staticDbClick(event) {
       compObj = compObj && compObj.component;
       if (!compObj) return;
       
-      var compNode = ReactDOM.findDOMNode(compObj), staticNode = null;
+      var compNode = findDomNode_(compObj), staticNode = null;
       if (compNode) staticNode = compNode.querySelector('.rewgt-static[name="' + sName + '"]');
       if (staticNode === node) {  // static node still available
         staticNode.innerHTML = sHtml;
@@ -4141,7 +4171,7 @@ function staticDbClick(event) {
             for (var i=0; i < iLen; i++) {
               var child = gui.comps[i];
               if (child && hasClass_(child.props.className,'rewgt-static') && child.props.name === sName) {
-                gui.comps[i] = React.cloneElement(child,{name:newName}); // for dumpReactTree
+                gui.comps[i] = reactClone_(child,{name:newName}); // for dumpReactTree
                 break;
               }
             }
@@ -4225,7 +4255,7 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
         continue;
       }
       else if (tp == 'function') {
-        bRet.push(React.createElement(item));
+        bRet.push(reactCreate_(item));
         continue;
       }
       
@@ -4266,13 +4296,13 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
           var bRet_ = [];
           createSysEle(bRet_,item,1);
           if (isEle)
-            bRet.push(React.cloneElement(sName,dProp,bRet_));
-          else bRet.push(React.createElement(sName,dProp,bRet_));
+            bRet.push(reactClone_(sName,dProp,bRet_));
+          else bRet.push(reactCreate_(sName,dProp,bRet_));
         }
         else {
           if (isEle)
-            bRet.push(isNoneProp? sName: React.cloneElement(sName,dProp));
-          else bRet.push(React.createElement(sName,dProp));
+            bRet.push(isNoneProp? sName: reactClone_(sName,dProp));
+          else bRet.push(reactCreate_(sName,dProp));
         }
       }
     }
@@ -4304,7 +4334,7 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
       for (var i=0,item; item=node.children[i]; i+=1) {
         bList.push(item);
       }
-      bRet.push(React.createElement('div',{ className:'rewgt-static',name:idx+''}));
+      bRet.push(reactCreate_('div',{ className:'rewgt-static',name:idx+''}));
       return true;  // true means has static text
     }
     return false;
@@ -4316,7 +4346,7 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
   
   var lnkTemp = (sName === 'RefDiv' || sName === 'RefSpan')? sName: '';
   if (lnkTemp) {
-    bRet.push(React.createElement(getTemplate(lnkTemp,sPrefix_),dProp));
+    bRet.push(reactCreate_(getTemplate(lnkTemp,sPrefix_),dProp));
     return false;
   }
   
@@ -4332,13 +4362,13 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
       var bRet_ = [];
       createSysEle(bRet_,bTree,1);
       if (iTagType == 3)
-        bRet.push(React.cloneElement(objTemp,dProp,bRet));
-      else bRet.push(React.createElement(objTemp,dProp,bRet_));
+        bRet.push(reactClone_(objTemp,dProp,bRet));
+      else bRet.push(reactCreate_(objTemp,dProp,bRet_));
     }
     else {
       if (iTagType == 3)
-        bRet.push(isNoneProp? objTemp: React.cloneElement(objTemp,dProp));
-      else bRet.push(React.createElement(objTemp,dProp));
+        bRet.push(isNoneProp? objTemp: reactClone_(objTemp,dProp));
+      else bRet.push(reactCreate_(objTemp,dProp));
     }
   }
   else {
@@ -4353,14 +4383,14 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
         else if (React.isValidElement(item))
           bArgs.push(item);
         else if ((tp=typeof item) == 'string')
-          bArgs.push(React.createElement(Span__,{'html.':item}));
+          bArgs.push(reactCreate_(Span__,{'html.':item}));
         else if (tp == 'function')
-          bArgs.push(React.createElement(item));
+          bArgs.push(reactCreate_(item));
         // else, ignore
       }
       if (hasStatic) bArgs[1] = Object.assign({},dProp,{'hasStatic.':true});
     }
-    bRet.push(React.createElement.apply(null,bArgs));
+    bRet.push(reactCreate_.apply(null,bArgs));
   }
   
   return false;  // false means no static text
@@ -4666,7 +4696,7 @@ function childElements_(childEle,ownerWdgt) { // get recent children, not same t
     });
     return bRet;
   }
-  else return React.Children.toArray(childEle.props.children);
+  else return children2Arr_(childEle.props.children);
 };
 
 utils.gotoHash = function(sHash,callback,wdgt) { // overwrite previous dummy function
@@ -5058,8 +5088,13 @@ function loadReference_(entry, keyName, callback) { // entry is linker owner com
     dProp['keyid.'] = keyid3;
     
     // step 4, replace ref node
-    gui.comps[compIdx] = React.cloneElement(targ, dProp);  // replace link widget
-    entry.setState({id__:identicalId()},callback); // can not use reRender() since entry.isHooked can be false
+    gui.comps[compIdx] = reactClone_(targ, dProp);  // replace link widget
+    entry.setState({id__:identicalId()}, function() {
+      var subComp = entry.widget[keyid3];
+      subComp = subComp && subComp.component;
+      if (subComp) renewStaticChild(subComp); // reactClone_() not clone static node
+      callback();
+    }); // can not use reRender() since entry.isHooked can be false
   }
   
   function getComponent(widget,sPath,sPath_,isTemplate,sPrefix) {
@@ -5452,26 +5487,20 @@ W.$main.$$onLoad_ = function(designCallback) {
     else callback();
   }
   
-  function processOneInit(onLoads) {
-    var fn = onLoads.shift();
-    if (fn) {
-      fn( function() {
-        processOneInit(onLoads);
-      })
-    }
+  function processOneInit() {
+    var fn = onLoading.shift();
+    if (fn)
+      fn(processOneInit);
     else {
       processRef( function() {
         justFirstRender_ = false;
         inFirstLoading_ = false;      // has load pending RefDiv/RefSpan
         
         // set default PageController // all pendingRefers_ has set by now
-        if (!W.__design__ && containNode_) {
+        if (!W.__design__ && containNode_ && !utils.pageCtrl) {
           var bPage = listScenePage_();
-          if (bPage.length) {  // has ScenePage, need setup PageController
-            if (utils.pageCtrl && utils.pageCtrl.destory)
-              utils.pageCtrl.destory();
+          if (bPage.length)  // has ScenePage, need setup PageController
             utils.pageCtrl = new pageCtrl_(bPage);
-          }
         }
         
         // fire W.$main.$onload
@@ -5512,7 +5541,8 @@ W.$main.$$onLoad_ = function(designCallback) {
   }
   
   justFirstRender_ = true;
-  processOneInit((W.$main.$$onLoad || []).slice(0));
+  var onLoading = W.$main.$$onLoading = (W.$main.$$onLoad || []).slice(0);
+  processOneInit();
 };
 
 var supportedEvent_ = { onCopy: true, onCut: true, onPaste: true,
@@ -5658,7 +5688,7 @@ function setupContainerApi_(containNode_) {
 }
 
 function renewStaticChild(compObj,isForce) {
-  var node = ReactDOM.findDOMNode(compObj);
+  var node = findDomNode_(compObj);
   if (!node) return;
   
   var bScan = [], nodes = node.querySelectorAll('.rewgt-static');
@@ -5921,7 +5951,7 @@ class TWidget_ {
   _getGroupOpt(self) {
     return { type: 'mono', // mono, extend
       editable: 'all',     // all, some, none
-      baseUrl: '/app/files/rewgt/web',
+      baseUrl: creator.appBase(),
       tools: [],
     };
   }
@@ -6227,7 +6257,7 @@ class TWidget_ {
     }
     gui.useSparedX  = false; gui.useSparedY = false; gui.respared = false;
     gui.sparedTotal = 0;     // 0 means not use
-    gui.compIdx = {}; gui.comps = React.Children.toArray(this.props.children);
+    gui.compIdx = {}; gui.comps = children2Arr_(this.props.children);
     
     Object.defineProperty(this.duals,'keyid', { enumerable:true, configurable:true,
       get: (function() {
@@ -6508,7 +6538,7 @@ class TWidget_ {
             bComp[iPos] = undefined;
             return;
           }
-          child = bComp[iPos] = React.createElement(Span__,{'html.':child}); // auto change to React Element
+          child = bComp[iPos] = reactCreate_(Span__,{'html.':child}); // auto change to React Element
         }
         else if (!child) return;
         
@@ -6543,8 +6573,8 @@ class TWidget_ {
             }
             compIdx[keyid] = iPos;
             if (childInline) // div.rewgt-static --> span.rewgt-static
-              bComp[iPos] = React.createElement('span',dProp);
-            else bComp[iPos] = React.createElement('div',dProp); // React.cloneElement(child, dProp);
+              bComp[iPos] = reactCreate_('span',dProp);
+            else bComp[iPos] = reactCreate_('div',dProp); // reactClone_(child, dProp);
           }
           else {  // can not add rewgt-static to panel widget
             bComp[iPos] = undefined;
@@ -6573,7 +6603,7 @@ class TWidget_ {
         else {   // is pure react element, no checking
           compIdx[keyid] = iPos;
           if (!isOld)
-            bComp[iPos] = React.cloneElement(child,{key:sKey}); // not pass 'keyid.' to avoid react warning
+            bComp[iPos] = reactClone_(child,{key:sKey}); // not pass 'keyid.' to avoid react warning
           return;
         }
         
@@ -6629,6 +6659,8 @@ class TWidget_ {
           if (!childInline) {    // panel or unit
             props.width = wdAuto_?null:wd;  // also perform check in duals.width, set here to help spared-space caculating
             props.height = hiAuto_?null:hi;
+            if (isTopmost && child.props['isScenePage.'] && child.props.noShow && !W.__design__)
+              props['isTemplate.'] = true;
           }
           else { // paragraph (div p li h1 blockquote ...) or inline widget, convert width/height to style.width/height
             var isPara = hasClass_(child.props.className,'rewgt-unit');
@@ -6663,7 +6695,7 @@ class TWidget_ {
           }
           
           compIdx[keyid] = iPos;
-          bComp[iPos] = React.cloneElement(child,props); // width/height should pass parseFloat() for scaning spared space
+          bComp[iPos] = reactClone_(child,props); // width/height should pass parseFloat() for scaning spared space
         }
       });  // end of bComp.forEach()
       
@@ -6684,7 +6716,7 @@ class TWidget_ {
       
       if (isTopmost && oldNumId == 0) {
         compIdx['$pop'] = bComp.length + gui.removeNum;
-        bComp.push( React.createElement(React.createClass(T.Panel._extend()),{'hookTo.':hookThis, key:'$pop', 'keyid.':'$pop',
+        bComp.push( reactCreate_(React.createClass(T.Panel._extend()),{'hookTo.':hookThis, key:'$pop', 'keyid.':'$pop',
           left:0, top:0, width:0, height:0,
           style:{position:'absolute',zIndex:3016,overflow:'visible'}, 
         }));
@@ -6726,10 +6758,10 @@ class TWidget_ {
   componentDidMount() {
     this.isHooked = !!this.widget;
     
-    var gui = this.$gui;
-    if (!gui.isPanel && this.props['hasStatic.'])
+    if (this.props['hasStatic.'])
       renewStaticChild(this);
     
+    var gui = this.$gui;
     if (gui.syncExpr) { // $expr='all: ...'  or  $expr='strict: ...'
       var item;
       while (item = gui.syncExpr.shift()) { // item is [sKey,fn]
@@ -7041,7 +7073,7 @@ class TWidget_ {
   }
   
   getHtmlNode(component) {
-    return ReactDOM.findDOMNode(component || this);
+    return findDomNode_(component || this);
   }
   
   parentOf() {
@@ -7190,13 +7222,13 @@ class TWidget_ {
           delete dProp.key;
           delete dProp['keyid.'];
         }
-        return React.createElement(iFlag == 1?RefDiv__:RefSpan__,Object.assign(dProp,props));
+        return reactCreate_(iFlag == 1?RefDiv__:RefSpan__,Object.assign(dProp,props));
       }
       
       if (this.props['isTemplate.'] && !W.__design__) {
         var tempObj = this.$gui.template;
         if (tempObj instanceof templateNode)
-          return React.cloneElement(ele,{template:tempObj},null);
+          return reactClone_(ele,{template:tempObj},null);
         else throw new Error('invalid template (' + keyid + ')');
       }
     }
@@ -7284,7 +7316,7 @@ class TWidget_ {
         bKeys.unshift(sKey_);
         
         if (hasClass_(child.props.className,'rewgt-static'))
-          bComp[i] = React.cloneElement(child,{key:sKey_});
+          bComp[i] = reactClone_(child,{key:sKey_});
         else {
           var iTmp = parseInt(sKey_);
           if ((iTmp+'') === sKey_)
@@ -7292,7 +7324,7 @@ class TWidget_ {
           else keyid_ = sKey_;
           
           if (keyid_ !== child.props['keyid.'])  // ensure using 'keyid.'
-            bComp[i] = React.cloneElement(child,{'keyid.':keyid_,key:sKey_});
+            bComp[i] = reactClone_(child,{'keyid.':keyid_,key:sKey_});
         }
       }
       else {
@@ -7588,6 +7620,9 @@ class TWidget_ {
           if (item.props['childInline.'] !== undefined) {
             props['hookTo.'] = thisWidget; // not react element
             
+            if (isTopmost && item.props['isScenePage.'] && item.props.noShow && !W.__design__)
+              props['isTemplate.'] = true;
+            
             if (currWidgetType != 4) { // panel/unit/p, not inline widget
               props.width = item.props.width;
               props.height = item.props.height;
@@ -7598,7 +7633,7 @@ class TWidget_ {
             else if (useCellY)
               props.height = bColumn[i % useCellY];
           }
-          bComp[i] = React.cloneElement(item, props);
+          bComp[i] = reactClone_(item, props);
         }
         else {
           currKeyid = item.props['keyid.'];
@@ -7866,7 +7901,7 @@ class TWidget_ {
     
     var bChild = this.prepareState();
     var props = setupRenderProp_(this);
-    return React.createElement('div', props, bChild);
+    return reactCreate_('div', props, bChild);
   }
 }
 
@@ -7890,13 +7925,13 @@ function nodesDualFn_(value,oldValue) {
       }
       
       if (typeof ele == 'string') {
-        ele = item[1] = React.createElement(P__,{key:sKey,'keyid.':sKey,'html.':ele});
+        ele = item[1] = reactCreate_(P__,{key:sKey,'keyid.':sKey,'html.':ele});
         bNewKey.unshift(sKey);
         bNewEle.unshift(ele);
       }
       else if (React.isValidElement(ele)) {
         if (ele.props['keyid.'] !== sKey)
-          ele = item[1] = React.cloneElement(ele,{key:sKey,'keyid.':sKey});
+          ele = item[1] = reactClone_(ele,{key:sKey,'keyid.':sKey});
         bNewKey.unshift(sKey);
         bNewEle.unshift(ele);
       }
@@ -7905,7 +7940,7 @@ function nodesDualFn_(value,oldValue) {
           ele = utils.loadElement(ele);
           if (ele) {
             if (ele.props['keyid.'] !== sKey)
-              ele = React.cloneElement(ele,{key:sKey,'keyid.':sKey});
+              ele = reactClone_(ele,{key:sKey,'keyid.':sKey});
             item[1] = ele;
             bNewKey.unshift(sKey);
             bNewEle.unshift(ele);
@@ -7995,7 +8030,7 @@ class TBodyPanel_ extends TWidget_ {
     if (gui.onWinResize)
       window.addEventListener('resize',gui.onWinResize,false);
     
-    var node = ReactDOM.findDOMNode(this);
+    var node = findDomNode_(this);
     if (node) keyOfNode_(node);  // try install getKeyFromNode_
   }
   
@@ -8499,11 +8534,11 @@ class TGridPanel_ extends TPanel_ {
           var wdHi = bColumn[idx++ % sizeLen];
           if (gui.inRow) {
             if (child.props.width !== wdHi)  // wdHi maybe null
-              gui.comps[iPos] = React.cloneElement(child,{width:wdHi});
+              gui.comps[iPos] = reactClone_(child,{width:wdHi});
           }
           else {
             if (child.props.height !== wdHi)
-              gui.comps[iPos] = React.cloneElement(child,{height:wdHi});
+              gui.comps[iPos] = reactClone_(child,{height:wdHi});
           }
         });
       }
@@ -8639,10 +8674,10 @@ class TGridPanel_ extends TPanel_ {
     var bChild = this.prepareState();
     
     if (W.__design__)
-      bChild.push(React.createElement('div',{key:'$end',title:'end of GridPanel',style:{width:'100%',height:'10px',backgroundColor:'#eee'}}));
+      bChild.push(reactCreate_('div',{key:'$end',title:'end of GridPanel',style:{width:'100%',height:'10px',backgroundColor:'#eee'}}));
     
     var props = setupRenderProp_(this);
-    return React.createElement('div', props, bChild);
+    return reactCreate_('div', props, bChild);
   }
 }
 
@@ -8765,9 +8800,9 @@ class TTableRow_ extends TUnit_ {
       }
       else tdHiAuto = true;    // cellHi = null
       if ((wdChanged && cellWd !== null) || hiChanged)
-        cell = React.cloneElement(cell,{width:cellWd,height:cellHi});
+        cell = reactClone_(cell,{width:cellWd,height:cellHi});
       
-      bChild.push(React.createElement('td',dTdProp,cell));
+      bChild.push(reactCreate_('td',dTdProp,cell));
     });
     
     if (this.isHooked) {
@@ -8785,7 +8820,7 @@ class TTableRow_ extends TUnit_ {
     else delete dStyle.height;
     
     var props = setupRenderProp_(this,dStyle);
-    return React.createElement('tr',props,bChild);
+    return reactCreate_('tr',props,bChild);
   }
 }
 
@@ -8873,14 +8908,14 @@ class TTablePanel_ extends TPanel_ {
       
       var dEmpty = {style:{margin:'10px'}}, dEmpty2 = {style:{margin:'2px'}}, bTmp = [];
       for (var i=0; i < iNeedCol; i+=1) {
-        bTmp.push(React.createElement('td',{key:i+'',style:{backgroundColor:'#eee'}},React.createElement('div',i==0?dEmpty:dEmpty2)));
+        bTmp.push(reactCreate_('td',{key:i+'',style:{backgroundColor:'#eee'}},reactCreate_('div',i==0?dEmpty:dEmpty2)));
       }
-      bChild.push(React.createElement('tr',{key:'$end',title:'end of TablePanel',style:{height:'10px'}},bTmp));
+      bChild.push(reactCreate_('tr',{key:'$end',title:'end of TablePanel',style:{height:'10px'}},bTmp));
     }
     
-    var tBody = React.createElement('tbody', null, bChild);
+    var tBody = reactCreate_('tbody', null, bChild);
     var props = setupRenderProp_(this);
-    return React.createElement('table', props, tBody);
+    return reactCreate_('table', props, tBody);
   }
 }
 
@@ -8927,7 +8962,7 @@ class TDiv_ extends TUnit_ {
     
     var bChild = this.prepareState();
     var props = setupRenderProp_(this);
-    return React.createElement(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
+    return reactCreate_(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
   }
 }
 
@@ -8958,110 +8993,36 @@ class THiddenDiv_ extends TDiv_ {
 T.HiddenDiv_ = THiddenDiv_;
 T.HiddenDiv  = new THiddenDiv_();
 
-class TArticle_ extends TDiv_ {
-  constructor(name,desc) {
-    super(name || 'Article',desc);
+function simpleExtends(TBase,sName) {
+  class T extends TBase {
+    constructor(name,desc) {
+      super(name || sName,desc);
+    }
+    
+    getDefaultProps() {
+      var props = super.getDefaultProps();
+      props['tagName.'] = sName.toLowerCase();
+      return props;
+    }
   }
   
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'article';
-    return props;
-  }
+  return T;
 }
 
-T.Article_ = TArticle_;
-T.Article  = new TArticle_();
-
-class TSection_ extends TDiv_ {
-  constructor(name,desc) {
-    super(name || 'Section',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'section';
-    return props;
-  }
-}
-
-T.Section_ = TSection_;
-T.Section  = new TSection_();
-
-class THeader_ extends TDiv_ {
-  constructor(name,desc) {
-    super(name || 'Header',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'header';
-    return props;
-  }
-}
-
-T.Header_ = THeader_;
-T.Header  = new THeader_();
-
-class TFooter_ extends TDiv_ {
-  constructor(name,desc) {
-    super(name || 'Footer',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'footer';
-    return props;
-  }
-}
-
-T.Footer_ = TFooter_;
-T.Footer  = new TFooter_();
-
-class TAside_ extends TDiv_ {
-  constructor(name,desc) {
-    super(name || 'Aside',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'aside';
-    return props;
-  }
-}
-
-T.Aside_ = TAside_;
-T.Aside  = new TAside_();
-
-class TNav_ extends TDiv_ {
-  constructor(name,desc) {
-    super(name || 'Nav',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'nav';
-    return props;
-  }
-}
-
-T.Nav_ = TNav_;
-T.Nav  = new TNav_();
-
-class TMain_ extends TDiv_ {
-  constructor(name,desc) {
-    super(name || 'Main',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'main';
-    return props;
-  }
-}
-
-T.Main_ = TMain_;
-T.Main  = new TMain_();
+T.Article_ = simpleExtends(TDiv_,'Article');
+T.Article  = new T.Article_();
+T.Section_ = simpleExtends(TDiv_,'Section');
+T.Section  = new T.Section_();
+T.Header_  = simpleExtends(TDiv_,'Header');
+T.Header   = new T.Header_();
+T.Footer_  = simpleExtends(TDiv_,'Footer');
+T.Footer   = new T.Footer_();
+T.Aside_   = simpleExtends(TDiv_,'Aside');
+T.Aside    = new T.Aside_();
+T.Nav_     = simpleExtends(TDiv_,'Nav');
+T.Nav      = new T.Nav_();
+T.Main_    = simpleExtends(TDiv_,'Main');
+T.Main     = new T.Main_();
 
 var TPara_margin_ = [6, 0, 6, 0];
 
@@ -9103,7 +9064,7 @@ class TP_ extends TUnit_ {
     
     var bChild = this.prepareState();
     var props = setupRenderProp_(this);
-    return React.createElement(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
+    return reactCreate_(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
   }
 }
 
@@ -9127,7 +9088,7 @@ class TNoscript_ extends TP_ {
   
   render() {
     syncProps_(this);  // should call syncProps since duals.attr in using
-    return React.createElement(this.props['tagName.']); // ignore props and children
+    return reactCreate_(this.props['tagName.']); // ignore props and children
   }
 }
 
@@ -9156,20 +9117,8 @@ class TFieldset_ extends TP_ {
 T.Fieldset_ = TFieldset_;
 T.Fieldset  = new TFieldset_();
 
-class TDetails_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Details',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'details';
-    return props;
-  }
-}
-
-T.Details_ = TDetails_;
-T.Details  = new TDetails_();
+T.Details_  = simpleExtends(TP_,'Details');
+T.Details   = new T.Details_();
 
 var TUl_padding_ = [0, 0, 0, 20];
 
@@ -9207,155 +9156,26 @@ class TOl_ extends TP_ {
 T.Ol_ = TOl_;
 T.Ol  = new TOl_();
 
-class TLi_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Li',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'li';
-    return props;
-  }
-}
-
-T.Li_ = TLi_;
-T.Li  = new TLi_();
-
-class TDl_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Dl',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'dl';
-    return props;
-  }
-}
-
-T.Dl_ = TDl_;
-T.Dl  = new TDl_();
-
-class TDd_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Dd',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'dd';
-    return props;
-  }
-}
-
-T.Dd_ = TDd_;
-T.Dd  = new TDd_();
-
-class TDt_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Dt',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'dt';
-    return props;
-  }
-}
-
-T.Dt_ = TDt_;
-T.Dt  = new TDt_();
-
-class TFigure_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Figure',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'figure';
-    return props;
-  }
-}
-
-T.Figure_ = TFigure_;
-T.Figure  = new TFigure_();
-
-class TFigcaption_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Figcaption',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'figcaption';
-    return props;
-  }
-}
-
-T.Figcaption_ = TFigcaption_;
-T.Figcaption  = new TFigcaption_();
-
-class TMenu_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Menu',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'menu';
-    return props;
-  }
-}
-
-T.Menu_ = TMenu_;
-T.Menu  = new TMenu_();
-
-class TMenuitem_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Menuitem',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'menuitem';
-    return props;
-  }
-}
-
-T.Menuitem_ = TMenuitem_;
-T.Menuitem  = new TMenuitem_();
-
-class TAddress_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Address',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'address';
-    return props;
-  }
-}
-
-T.Address_ = TAddress_;
-T.Address  = new TAddress_();
-
-class TForm_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Form',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'form';
-    return props;
-  }
-}
-
-T.Form_ = TForm_;
-T.Form  = new TForm_();
+T.Li_  = simpleExtends(TP_,'Li');
+T.Li   = new T.Li_();
+T.Dl_  = simpleExtends(TP_,'Dl');
+T.Dl   = new T.Dl_();
+T.Dd_  = simpleExtends(TP_,'Dd');
+T.Dd   = new T.Dd_();
+T.Dt_  = simpleExtends(TP_,'Dt');
+T.Dt   = new T.Dt_();
+T.Figure_ = simpleExtends(TP_,'Figure');
+T.Figure  = new T.Figure_();
+T.Figcaption_ = simpleExtends(TP_,'Figcaption');
+T.Figcaption  = new T.Figcaption_();
+T.Menu_ = simpleExtends(TP_,'Menu');
+T.Menu  = new T.Menu_();
+T.Menuitem_ = simpleExtends(TP_,'Menuitem');
+T.Menuitem  = new T.Menuitem_();
+T.Address_ = simpleExtends(TP_,'Address');
+T.Address  = new T.Address_();
+T.Form_ = simpleExtends(TP_,'Form');
+T.Form  = new T.Form_();
 
 var TIframe_margin_ = [0,0,0,0];
 
@@ -9412,65 +9232,14 @@ class TTable_ extends TP_ {
 T.Table_ = TTable_;
 T.Table  = new TTable_();
 
-class TCaption_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Caption',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'caption';
-    return props;
-  }
-}
-
-T.Caption_ = TCaption_;
-T.Caption  = new TCaption_();
-
-class TCol_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Col',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'col';
-    return props;
-  }
-}
-
-T.Col_ = TCol_;
-T.Col  = new TCol_();
-
-class TColgroup_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Colgroup',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'colgroup';
-    return props;
-  }
-}
-
-T.Colgroup_ = TColgroup_;
-T.Colgroup  = new TColgroup_();
-
-class TTd_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Td',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'td';
-    return props;
-  }
-}
-
-T.Td_ = TTd_;
-T.Td  = new TTd_();
+T.Caption_ = simpleExtends(TP_,'Caption');
+T.Caption  = new T.Caption_();
+T.Col_ = simpleExtends(TP_,'Col');
+T.Col  = new T.Col_();
+T.Colgroup_ = simpleExtends(TP_,'Colgroup');
+T.Colgroup  = new T.Colgroup_();
+T.Td_ = simpleExtends(TP_,'Td');
+T.Td  = new T.Td_();
 
 var TBody_margin_ = [0,0,0,0];
 
@@ -9494,11 +9263,11 @@ class TTbody_ extends TP_ {
       if (this.hideThis) return null;   // as <noscript>
       
       var bChild = this.prepareState();
-      var tailRow = React.createElement('tr',{key:'$end',title:'end of Tbody',style:{height:'10px'}},React.createElement('td'));
+      var tailRow = reactCreate_('tr',{key:'$end',title:'end of Tbody',style:{height:'10px'}},reactCreate_('td'));
       bChild.push(tailRow);
       
       var props = setupRenderProp_(this);
-      return React.createElement(this.props['tagName.'],props,bChild);
+      return reactCreate_(this.props['tagName.'],props,bChild);
     }
     else return super.render();
   }
@@ -9507,35 +9276,10 @@ class TTbody_ extends TP_ {
 T.Tbody_ = TTbody_;
 T.Tbody  = new TTbody_();
 
-class TThead_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Thead',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'thead';
-    return props;
-  }
-}
-
-T.Thead_ = TThead_;
-T.Thead  = new TThead_();
-
-class TTfoot_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Tfoot',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'tfoot';
-    return props;
-  }
-}
-
-T.Tfoot_ = TTfoot_;
-T.Tfoot  = new TTfoot_();
+T.Thead_ = simpleExtends(TP_,'Thead');
+T.Thead  = new T.Thead_();
+T.Tfoot_ = simpleExtends(TP_,'Tfoot');
+T.Tfoot  = new T.Tfoot_();
 
 var ThTr_margin_ = [0,0,0,0];
 
@@ -9575,110 +9319,21 @@ class TTr_ extends TP_ {
 T.Tr_ = TTr_;
 T.Tr  = new TTr_();
 
-class THgroup_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Hgroup',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'hgroup';
-    return props;
-  }
-}
+T.Hgroup_ = simpleExtends(TP_,'Hgroup');
+T.Hgroup  = new T.Hgroup_();
 
-T.Hgroup_ = THgroup_;
-T.Hgroup  = new THgroup_();
-
-class TH1_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'H1',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'h1';
-    return props;
-  }
-}
-
-T.H1_ = TH1_;
-T.H1  = new TH1_();
-
-class TH2_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'H2',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'h2';
-    return props;
-  }
-}
-
-T.H2_ = TH2_;
-T.H2  = new TH2_();
-
-class TH3_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'H3',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'h3';
-    return props;
-  }
-}
-
-T.H3_ = TH3_;
-T.H3  = new TH3_();
-
-class TH4_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'H4',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'h4';
-    return props;
-  }
-}
-
-T.H4_ = TH4_;
-T.H4  = new TH4_();
-
-class TH5_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'H5',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'h5';
-    return props;
-  }
-}
-
-T.H5_ = TH5_;
-T.H5  = new TH5_();
-
-class TH6_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'H6',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'h6';
-    return props;
-  }
-}
-
-T.H6_ = TH6_;
-T.H6  = new TH6_();
+T.H1_ = simpleExtends(TP_,'H1');
+T.H1  = new T.H1_();
+T.H2_ = simpleExtends(TP_,'H2');
+T.H2  = new T.H2_();
+T.H3_ = simpleExtends(TP_,'H3');
+T.H3  = new T.H3_();
+T.H4_ = simpleExtends(TP_,'H4');
+T.H4  = new T.H4_();
+T.H5_ = simpleExtends(TP_,'H5');
+T.H5  = new T.H5_();
+T.H6_ = simpleExtends(TP_,'H6');
+T.H6  = new T.H6_();
 
 var THr_border_width_ = [1,1,1,1];
 
@@ -9702,20 +9357,8 @@ class THr_ extends TP_ {
 T.Hr_ = THr_;
 T.Hr  = new THr_();
 
-class TPre_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Pre',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'pre';
-    return props;
-  }
-}
-
-T.Pre_ = TPre_;
-T.Pre  = new TPre_();
+T.Pre_ = simpleExtends(TP_,'Pre');
+T.Pre  = new T.Pre_();
 
 // inline widgets
 //---------------
@@ -9903,7 +9546,7 @@ class TSpan_ extends TWidget_ {
     }
     
     // step 5: regist duals
-    gui.compIdx = {}; gui.comps = React.Children.toArray(this.props.children);
+    gui.compIdx = {}; gui.comps = children2Arr_(this.props.children);
     
     Object.defineProperty(this.duals,'keyid', { enumerable:true, configurable:true,
       get: (function() {
@@ -9959,7 +9602,7 @@ class TSpan_ extends TWidget_ {
             bComp[iPos] = undefined;
             return;
           }
-          child = bComp[iPos] = React.createElement(Span__,{'html.':child}); // auto change to React Element
+          child = bComp[iPos] = reactCreate_(Span__,{'html.':child}); // auto change to React Element
         }
         else if (!child) return;
         
@@ -9992,7 +9635,7 @@ class TSpan_ extends TWidget_ {
             dProp.onDoubleClick = staticDbClick.bind(thisObj);
           }
           compIdx[keyid] = iPos;
-          bComp[iPos] = React.createElement('span', dProp); // div.rewgt-static --> span.rewgt-static
+          bComp[iPos] = reactCreate_('span', dProp); // div.rewgt-static --> span.rewgt-static
           return; // adjust nothing on rewgt-static widget
         }
         
@@ -10006,7 +9649,7 @@ class TSpan_ extends TWidget_ {
         else { // is pure react element
           compIdx[keyid] = iPos;
           if (!isOld)
-            bComp[iPos] = React.cloneElement(child,{key:sKey}); // not pass 'keyid.'
+            bComp[iPos] = reactClone_(child,{key:sKey}); // not pass 'keyid.'
           return;
         }
         
@@ -10023,7 +9666,7 @@ class TSpan_ extends TWidget_ {
           isOld = false;
         compIdx[keyid] = iPos;
         if (!isOld)
-          bComp[iPos] = React.cloneElement(child,{'hookTo.':hookThis, key:sKey, 'keyid.':keyid});
+          bComp[iPos] = reactClone_(child,{'hookTo.':hookThis, key:sKey, 'keyid.':keyid});
       });
     });
     
@@ -10050,11 +9693,11 @@ class TSpan_ extends TWidget_ {
   
   render() {
     syncProps_(this);
-    if (this.hideThis) return React.createElement('span',displayNoneProp_);
+    if (this.hideThis) return reactCreate_('span',displayNoneProp_);
     
     var props = setupRenderProp_(this);
     var b = this.$gui.comps, children = b.length?b:this.state['html.'];
-    return React.createElement(this.props['tagName.'], props, children);
+    return reactCreate_(this.props['tagName.'], props, children);
   }
 }
 
@@ -10114,40 +9757,15 @@ class TA_ extends TSpan_ {
 T.A_ = TA_;
 T.A  = new TA_();
 
-class TQ_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Q',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'q';
-    return props;
-  }
-}
-
-T.Q_ = TQ_;
-T.Q  = new TQ_();
-
-class TAbbr_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Abbr',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'abbr';
-    return props;
-  }
-}
-
-T.Abbr_ = TAbbr_;
-T.Abbr  = new TAbbr_();
+T.Q_ = simpleExtends(TSpan_,'Q');
+T.Q  = new T.Q_();
+T.Abbr_ = simpleExtends(TSpan_,'Abbr');
+T.Abbr  = new T.Abbr_();
 
 function addStepFunc_(comp) {
   comp.stepPlay = function(fSpeed) {      // not use fSpeed
     if (this.isHooked) {
-      var node = ReactDOM.findDOMNode(this);
+      var node = findDomNode_(this);
       if (node && node.readyState >= 2) { // 2: HAVE_CURRENT_DATA
         node.play();
         return true;
@@ -10158,7 +9776,7 @@ function addStepFunc_(comp) {
   
   comp.stepPause = function(sReason) {    // sReason: JUMP_PAGE,NEXT_PAGE,PRE_STEP,POST_STEP
     if (this.isHooked) {
-      var node = ReactDOM.findDOMNode(this);
+      var node = findDomNode_(this);
       if (node) {
         if (!node.paused)
           node.pause();
@@ -10170,7 +9788,7 @@ function addStepFunc_(comp) {
   
   comp.stepIsDone = function() {
     if (!this.isHooked) return true;
-    var node = ReactDOM.findDOMNode(this);
+    var node = findDomNode_(this);
     return !node || node.readyState < 2 || node.paused;
   };
 }
@@ -10208,125 +9826,22 @@ class TAudio_ extends TSpan_ {
 T.Audio_ = TAudio_;
 T.Audio  = new TAudio_();
 
-class TSource_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Source',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'source';
-    return props;
-  }
-}
-
-T.Source_ = TSource_;
-T.Source  = new TSource_();
-
-class TTrack_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Track',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'track';
-    return props;
-  }
-}
-
-T.Track_ = TTrack_;
-T.Track  = new TTrack_();
-
-class TBdi_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Bdi',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'bdi';
-    return props;
-  }
-}
-
-T.Bdi_ = TBdi_;
-T.Bdi  = new TBdi_();
-
-class TBdo_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Bdo',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'bdo';
-    return props;
-  }
-}
-
-T.Bdo_ = TBdo_;
-T.Bdo  = new TBdo_();
-
-class TData_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Data',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'data';
-    return props;
-  }
-}
-
-T.Data_ = TData_;
-T.Data  = new TData_();
-
-class TMark_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Mark',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'mark';
-    return props;
-  }
-}
-
-T.Mark_ = TMark_;
-T.Mark  = new TMark_();
-
-class TWbr_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Wbr',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'wbr';
-    return props;
-  }
-}
-
-T.Wbr_ = TWbr_;
-T.Wbr  = new TWbr_();
-
-class TButton_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Button',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'button';
-    return props;
-  }
-}
-
-T.Button_ = TButton_;
-T.Button  = new TButton_();
+T.Source_ = simpleExtends(TSpan_,'Source');
+T.Source  = new T.Source_();
+T.Track_ = simpleExtends(TSpan_,'Track');
+T.Track  = new T.Track_();
+T.Bdi_ = simpleExtends(TSpan_,'Bdi');
+T.Bdi  = new T.Bdi_();
+T.Bdo_ = simpleExtends(TSpan_,'Bdo');
+T.Bdo  = new T.Bdo_();
+T.Data_ = simpleExtends(TSpan_,'Data');
+T.Data  = new T.Data_();
+T.Mark_ = simpleExtends(TSpan_,'Mark');
+T.Mark  = new T.Mark_();
+T.Wbr_ = simpleExtends(TSpan_,'Wbr');
+T.Wbr  = new T.Wbr_();
+T.Button_ = simpleExtends(TSpan_,'Button');
+T.Button  = new T.Button_();
 
 class TTextarea_ extends TSpan_ {
   constructor(name,desc) {
@@ -10421,95 +9936,18 @@ class TVideo_ extends TSpan_ {
 T.Video_ = TVideo_;
 T.Video  = new TVideo_();
 
-class TCanvas_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Canvas',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'canvas';
-    return props;
-  }
-}
-
-T.Canvas_ = TCanvas_;
-T.Canvas  = new TCanvas_();
-
-class TPicture_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Picture',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'picture';
-    return props;
-  }
-}
-
-T.Picture_ = TPicture_;
-T.Picture  = new TPicture_();
-
-class TMap_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Map',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'map';
-    return props;
-  }
-}
-
-T.Map_ = TMap_;
-T.Map  = new TMap_();
-
-class TArea_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Area',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'area';
-    return props;
-  }
-}
-
-T.Area_ = TArea_;
-T.Area  = new TArea_();
-
-class TTime_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Time',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'time';
-    return props;
-  }
-}
-
-T.Time_ = TTime_;
-T.Time  = new TTime_();
-
-class TOutput_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Output',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'output';
-    return props;
-  }
-}
-
-T.Output_ = TOutput_;
-T.Output  = new TOutput_();
+T.Canvas_ = simpleExtends(TSpan_,'Canvas');
+T.Canvas  = new T.Canvas_();
+T.Picture_ = simpleExtends(TSpan_,'Picture');
+T.Picture  = new T.Picture_();
+T.Map_ = simpleExtends(TSpan_,'Map');
+T.Map  = new T.Map_();
+T.Area_ = simpleExtends(TSpan_,'Area');
+T.Area  = new T.Area_();
+T.Time_ = simpleExtends(TSpan_,'Time');
+T.Time  = new T.Time_();
+T.Output_ = simpleExtends(TSpan_,'Output');
+T.Output  = new T.Output_();
 
 class TInput_ extends TSpan_ {
   constructor(name,desc) {
@@ -10556,20 +9994,8 @@ class TInput_ extends TSpan_ {
 T.Input_ = TInput_;
 T.Input  = new TInput_();
 
-class TKeygen_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Keygen',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'keygen';
-    return props;
-  }
-}
-
-T.Keygen_ = TKeygen_;
-T.Keygen  = new TKeygen_();
+T.Keygen_ = simpleExtends(TSpan_,'Keygen');
+T.Keygen  = new T.Keygen_();
 
 class TLabel_ extends TSpan_ {
   constructor(name,desc) {
@@ -10593,50 +10019,12 @@ class TLabel_ extends TSpan_ {
 T.Label_ = TLabel_;
 T.Label  = new TLabel_();
 
-class TLegend_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Legend',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'legend';
-    return props;
-  }
-}
-
-T.Legend_ = TLegend_;
-T.Legend  = new TLegend_();
-
-class TSub_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Sub',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'sub';
-    return props;
-  }
-}
-
-T.Sub_ = TSub_;
-T.Sub  = new TSub_();
-
-class TSup_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Sup',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'sup';
-    return props;
-  }
-}
-
-T.Sup_ = TSup_;
-T.Sup  = new TSup_();
+T.Legend_ = simpleExtends(TSpan_,'Legend');
+T.Legend  = new T.Legend_();
+T.Sub_ = simpleExtends(TSpan_,'Sub');
+T.Sub  = new T.Sub_();
+T.Sup_ = simpleExtends(TSpan_,'Sup');
+T.Sup  = new T.Sup_();
 
 class TSelect_ extends TSpan_ {
   constructor(name,desc) {
@@ -10661,20 +10049,8 @@ class TSelect_ extends TSpan_ {
 T.Select_ = TSelect_;
 T.Select  = new TSelect_();
 
-class TDatalist_ extends TSelect_ {
-  constructor(name,desc) {
-    super(name || 'Datalist',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'datalist';
-    return props;
-  }
-}
-
-T.Datalist_ = TDatalist_;
-T.Datalist  = new TDatalist_();
+T.Datalist_ = simpleExtends(TSelect_,'Datalist');
+T.Datalist  = new T.Datalist_();
 
 class TOptgroup_ extends TSpan_ {
   constructor(name,desc) {
@@ -10699,290 +10075,44 @@ class TOptgroup_ extends TSpan_ {
 T.Optgroup_ = TOptgroup_;
 T.Optgroup  = new TOptgroup_();
 
-class TOption_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Option',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'option';
-    return props;
-  }
-}
-
-T.Option_ = TOption_;
-T.Option  = new TOption_();
-
-class TB_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'B',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'b';
-    return props;
-  }
-}
-
-T.B_ = TB_;
-T.B  = new TB_();
-
-class TI_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'I',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'i';
-    return props;
-  }
-}
-
-T.I_ = TI_;
-T.I  = new TI_();
-
-class TS_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'S',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 's';
-    return props;
-  }
-}
-
-T.S_ = TS_;
-T.S  = new TS_();
-
-class TU_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'U',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'u';
-    return props;
-  }
-}
-
-T.U_ = TU_;
-T.U  = new TU_();
-
-class TIns_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Ins',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'ins';
-    return props;
-  }
-}
-
-T.Ins_ = TIns_;
-T.Ins  = new TIns_();
-
-class TDel_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Del',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'del';
-    return props;
-  }
-}
-
-T.Del_ = TDel_;
-T.Del  = new TDel_();
-
-class TCode_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Code',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'code';
-    return props;
-  }
-}
-
-T.Code_ = TCode_;
-T.Code  = new TCode_();
-
-class TVar_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Var',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'var';
-    return props;
-  }
-}
-
-T.Var_ = TVar_;
-T.Var  = new TVar_();
-
-class TSummary_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Summary',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'summary';
-    return props;
-  }
-}
-
-T.Summary_ = TSummary_;
-T.Summary  = new TSummary_();
-
-class TEm_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Em',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'em';
-    return props;
-  }
-}
-
-T.Em_ = TEm_;
-T.Em  = new TEm_();
-
-class TStrong_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Strong',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'strong';
-    return props;
-  }
-}
-
-T.Strong_ = TStrong_;
-T.Strong  = new TStrong_();
-
-class TBig_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Big',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'big';
-    return props;
-  }
-}
-
-T.Big_ = TBig_;
-T.Big  = new TBig_();
-
-class TSmall_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Small',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'small';
-    return props;
-  }
-}
-
-T.Small_ = TSmall_;
-T.Small  = new TSmall_();
-
-class TDfn_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Dfn',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'dfn';
-    return props;
-  }
-}
-
-T.Dfn_ = TDfn_;
-T.Dfn  = new TDfn_();
-
-class TSamp_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Samp',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'samp';
-    return props;
-  }
-}
-
-T.Samp_ = TSamp_;
-T.Samp  = new TSamp_();
-
-class TKdb_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Kdb',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'kdb';
-    return props;
-  }
-}
-
-T.Kdb_ = TKdb_;
-T.Kdb  = new TKdb_();
-
-class TCite_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Cite',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'cite';
-    return props;
-  }
-}
-
-T.Cite_ = TCite_;
-T.Cite  = new TCite_();
-
-class TDialog_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Dialog',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'dialog';
-    return props;
-  }
-}
-
-T.Dialog_ = TDialog_;
-T.Dialog  = new TDialog_();
+T.Option_ = simpleExtends(TSpan_,'Option');
+T.Option  = new T.Option_();
+T.B_ = simpleExtends(TSpan_,'B');
+T.B  = new T.B_();
+T.I_ = simpleExtends(TSpan_,'I');
+T.I  = new T.I_();
+T.S_ = simpleExtends(TSpan_,'S');
+T.S  = new T.S_();
+T.U_ = simpleExtends(TSpan_,'U');
+T.U  = new T.U_();
+T.Ins_ = simpleExtends(TSpan_,'Ins');
+T.Ins  = new T.Ins_();
+T.Del_ = simpleExtends(TSpan_,'Del');
+T.Del  = new T.Del_();
+T.Code_ = simpleExtends(TSpan_,'Code');
+T.Code  = new T.Code_();
+T.Var_ = simpleExtends(TSpan_,'Var');
+T.Var  = new T.Var_();
+T.Summary_ = simpleExtends(TSpan_,'Summary');
+T.Summary  = new T.Summary_();
+T.Em_ = simpleExtends(TSpan_,'Em');
+T.Em  = new T.Em_();
+T.Strong_ = simpleExtends(TSpan_,'Strong');
+T.Strong  = new T.Strong_();
+T.Big_ = simpleExtends(TSpan_,'Big');
+T.Big  = new T.Big_();
+T.Small_ = simpleExtends(TSpan_,'Small');
+T.Small  = new T.Small_();
+T.Dfn_ = simpleExtends(TSpan_,'Dfn');
+T.Dfn  = new T.Dfn_();
+T.Samp_ = simpleExtends(TSpan_,'Samp');
+T.Samp  = new T.Samp_();
+T.Kdb_ = simpleExtends(TSpan_,'Kdb');
+T.Kdb  = new T.Kdb_();
+T.Cite_ = simpleExtends(TSpan_,'Cite');
+T.Cite  = new T.Cite_();
+T.Dialog_ = simpleExtends(TSpan_,'Dialog');
+T.Dialog  = new T.Dialog_();
 
 class TMeter_ extends TSpan_ {
   constructor(name,desc) {
@@ -11011,95 +10141,18 @@ class TMeter_ extends TSpan_ {
 T.Meter_ = TMeter_;
 T.Meter  = new TMeter_();
 
-class TEmbed_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Embed',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'embed';
-    return props;
-  }
-}
-
-T.Embed_ = TEmbed_;
-T.Embed  = new TEmbed_();
-
-class TObject_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Object',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'object';
-    return props;
-  }
-}
-
-T.Object_ = TObject_;
-T.Object  = new TObject_();
-
-class TParam_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Param',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'param';
-    return props;
-  }
-}
-
-T.Param_ = TParam_;
-T.Param  = new TParam_();
-
-class TRuby_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Ruby',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'ruby';
-    return props;
-  }
-}
-
-T.Ruby_ = TRuby_;
-T.Ruby  = new TRuby_();
-
-class TRp_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Rp',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'rp';
-    return props;
-  }
-}
-
-T.Rp_ = TRp_;
-T.Rp  = new TRp_();
-
-class TRt_ extends TSpan_ {
-  constructor(name,desc) {
-    super(name || 'Rt',desc);
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'rt';
-    return props;
-  }
-}
-
-T.Rt_ = TRt_;
-T.Rt  = new TRt_();
+T.Embed_ = simpleExtends(TSpan_,'Embed');
+T.Embed  = new T.Embed_();
+T.Object_ = simpleExtends(TSpan_,'Object');
+T.Object  = new T.Object_();
+T.Param_ = simpleExtends(TSpan_,'Param');
+T.Param  = new T.Param_();
+T.Ruby_ = simpleExtends(TSpan_,'Ruby');
+T.Ruby  = new T.Ruby_();
+T.Rp_ = simpleExtends(TSpan_,'Rp');
+T.Rp  = new T.Rp_();
+T.Rt_ = simpleExtends(TSpan_,'Rt');
+T.Rt  = new T.Rt_();
 
 // NavXXX, GroundXXX, OptXXX, RefXXX
 //-----------------------------------
@@ -11357,7 +10410,7 @@ class TNavPanel_ extends TPanel_ {
     }
     
     var props = setupRenderProp_(this);
-    return React.createElement('div',props,bChild);
+    return reactCreate_('div',props,bChild);
     
     function findInsPos(bChild,sKey) {
       for (var i=0,child; child=bChild[i]; i++) {
@@ -11419,7 +10472,7 @@ function designRenderGround(obj,iGroundId) {
     bChild = obj.state['html.'] || null;
   
   var props = setupRenderProp_(obj,dStyle);
-  return React.createElement('div',props,bChild);
+  return reactCreate_('div',props,bChild);
 }
 
 class TGroundPanel_ extends TPanel_ {
@@ -11490,7 +10543,7 @@ class TGroundDiv_ extends TUnit_ {
       
       var bChild = this.prepareState();
       var props = setupRenderProp_(this);
-      return React.createElement(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
+      return reactCreate_(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
     }
   }
 }
@@ -11662,6 +10715,7 @@ function addOptSchema_(dSchema,iLevel) {
 class TOptSpan_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'OptSpan',desc);
+    this._statedProp.push('data-checked');
     this._silentProp.push('isOption.');
     this._defaultProp['data-checked'] = '';
   }
@@ -11790,7 +10844,7 @@ class TOptOption_ extends TOptSpan_ {
       
       var self = this;
       setTimeout( function() {
-        var node = ReactDOM.findDOMNode(self);
+        var node = findDomNode_(self);
         if (node) node.selected = !!value; // maybe no duals.selected, synchorized here
       },0);
     });
@@ -11810,6 +10864,7 @@ T.OptOption  = new TOptOption_();
 class TOptDiv_ extends TDiv_ {
   constructor(name,desc) {
     super(name || 'OptDiv',desc);
+    this._statedProp.push('data-checked');
     this._silentProp.push('isOption.');
     this._defaultProp['data-checked'] = '';
   }
@@ -11865,6 +10920,7 @@ T.OptDiv  = new TOptDiv_();
 class TOptLi_ extends TP_ {
   constructor(name,desc) {
     super(name || 'OptLi',desc);
+    this._statedProp.push('data-checked');
     this._silentProp.push('isOption.');
     this._defaultProp['data-checked'] = '';
   }
@@ -11951,7 +11007,7 @@ class TOptInput_ extends TOptSpan_ {
   }
   
   clearChecked(targ) {
-    if (!targ) targ = ReactDOM.findDOMNode(this);
+    if (!targ) targ = findDomNode_(this);
     if (targ) {
       if (targ.checked) targ.checked = false; // will trigger onChange
       if (this.state['data-checked'])
@@ -11965,7 +11021,7 @@ class TOptInput_ extends TOptSpan_ {
     
     var sType = this.state.type;
     if (sType === 'checkbox' || sType === 'radio') {
-      var targ = ReactDOM.findDOMNode(this);
+      var targ = findDomNode_(this);
       if (targ) {
         if (targ.checked)
           this.setChecked(null);
@@ -12004,10 +11060,10 @@ function setTemplateChild_(temp,child) {
       if ((iTmp + '') == sPath)
         keyid_ = iTmp;
     }
-    ele = React.cloneElement(child,{'hookTo.':temp,'keyid.':keyid_,key:sPath});
+    ele = reactClone_(child,{'hookTo.':temp,'keyid.':keyid_,key:sPath});
   }
   else {
-    ele = React.cloneElement(child,{'hookTo.':temp,'keyid.':keyid_,key:sPath});
+    ele = reactClone_(child,{'hookTo.':temp,'keyid.':keyid_,key:sPath});
     if (child.props['isTemplate.']) {
       iFlag = 4;
       ele = new templateNode(ele);
@@ -12051,7 +11107,7 @@ function setTemplateChild_(temp,child) {
       }
       
       var sKeyid = keyid + '';
-      var iFlag2 = 1, ele2 = React.cloneElement(child,{'keyid.':keyid, key:sKeyid, 'hookTo.':temp});
+      var iFlag2 = 1, ele2 = reactClone_(child,{'keyid.':keyid, key:sKeyid, 'hookTo.':temp});
       var sPath2 = sPath? sPath + '.' + sKeyid: sKeyid;
       if (child.props['isTemplate.']) {
         iFlag2 = 4;
@@ -12223,7 +11279,7 @@ class TTempPanel_ extends TPanel_ {
       
       var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
       var props = setupRenderProp_(this,dStyle);
-      return React.createElement('div',props);
+      return reactCreate_('div',props);
     }
   }
 }
@@ -12293,7 +11349,7 @@ class TTempDiv_ extends TUnit_ {
       
       var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
       var props = setupRenderProp_(this,dStyle);
-      return React.createElement('div',props);
+      return reactCreate_('div',props);
     }
   }
 }
@@ -12345,11 +11401,11 @@ class TTempSpan_ extends TSpan_ {
       return super.render();
     else {
       syncProps_(this);
-      if (this.hideThis) return React.createElement('span',displayNoneProp_);
+      if (this.hideThis) return reactCreate_('span',displayNoneProp_);
       
       var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
       var props = setupRenderProp_(this,dStyle);
-      return React.createElement('span',props);
+      return reactCreate_('span',props);
     }
   }
 }
@@ -12396,7 +11452,7 @@ class TRefDiv_ extends TUnit_ {
     var sCls = classNameOf(this);
     var dProp = {style:{width:'0px',height:'0px'}};
     if (sCls) dProp.className = sCls;
-    return React.createElement('div',dProp);
+    return reactCreate_('div',dProp);
   }
 }
 
@@ -12440,7 +11496,7 @@ class TRefSpan_ extends TSpan_ {
     var sCls = classNameOf(this);
     var dProp = {style:{width:'0px',height:'0px'}};
     if (sCls) dProp.className = sCls;
-    return React.createElement('span',dProp);
+    return reactCreate_('span',dProp);
   }
 }
 
@@ -12453,7 +11509,7 @@ var RefSpan__ = creator.RefSpan__ = React.createClass(T.RefSpan._extend());
 class TScenePage_ extends TPanel_ {
   constructor(name,desc) {
     super(name || 'ScenePage',desc);
-    this._silentProp.push('isScenePage.');
+    this._silentProp.push('isScenePage.','isTemplate.');
     this._defaultProp.noShow = '';
   }
   
@@ -12496,8 +11552,27 @@ class TScenePage_ extends TPanel_ {
     if (typeof hi != 'number' || !(hi > 0))
       console.log('warning: invalid height of ScenePage (' + this.$gui.keyid + ')');
     
-    if (W.__design__) this.$gui.currSelected = '';
+    if (W.__design__)
+      this.$gui.currSelected = '';
+    else { // if not __design__, take as TempPanel
+      if (this.props['isTemplate.']) {   // props.noShow must be true
+        checkForIfElse_(this.$gui);
+        this.isLibGui = false;
+        
+        var template = this.props['template'];
+        if (template instanceof templateNode)
+          this.$gui.template = template; // pass from props.template, fixed (no changing)
+        else setupTemplateTree(this);
+        this.$gui.compIndex = {};
+        this.$gui.comps = [];  // force no child, referenced to this.$gui.template
+      }
+    }
+    
     return dState;
+  }
+  
+  elementOf(sPath) {
+    return this.props['isTemplate.']? templateElement_(this,sPath): super.elementOf(sPath);
   }
   
   setSelected(sKey) {
@@ -12535,17 +11610,24 @@ class TScenePage_ extends TPanel_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
-    var bChild = this.prepareState();
-    
-    var dStyle = undefined;
-    if (this.props.noShow && !W.__design__) { // if W.__design__, no change duals.style
-      dStyle = Object.assign({},this.state.style);
-      dStyle.display = 'none';
+    if (this.props['isTemplate.']) {
+      var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
+      var props = setupRenderProp_(this,dStyle);
+      return reactCreate_('div',props);
     }
-    
-    var centerDiv = React.createElement('div',{'className':'rewgt-center'},bChild);
-    var props = setupRenderProp_(this,dStyle);
-    return React.createElement('article',props,centerDiv);
+    else {
+      var bChild = this.prepareState();
+      
+      var dStyle = undefined;
+      if (this.props.noShow && !W.__design__) { // if W.__design__, no change duals.style
+        dStyle = Object.assign({},this.state.style);
+        dStyle.display = 'none';
+      }
+      
+      var centerDiv = reactCreate_('div',{'className':'rewgt-center'},bChild);
+      var props = setupRenderProp_(this,dStyle);
+      return reactCreate_('article',props,centerDiv);
+    }
   }
 }
 
@@ -12555,6 +11637,10 @@ var ScenePage__ = React.createClass(T.ScenePage._extend());
 
 // MaskablePanel
 //--------------
+
+function noPropagation(event) {
+  event.stopPropagation();
+}
 
 class TMaskPanel_ extends TPanel_ {
   constructor(name,desc) {
@@ -12569,20 +11655,19 @@ class TMaskPanel_ extends TPanel_ {
       if (oldValue !== 1) return;
       
       var bodyEle = null, frameEle = null;
-      var dFrame, noFrame = true, gui = this.$gui, popOption = this.props.popOption;
+      var dFrame, gui = this.$gui, popOption = this.props.popOption;
       if (popOption) {
         dFrame = popOption.frame;
         if (!dFrame)
           dFrame = {};
         else {
-          frameEle = this.props.popFrame; // should come from template or compObj.fullClone()
-          if (frameEle && frame.props)
-            noFrame = false;
-          else frameEle = null;
+          frameEle = this.props.popFrame;  // should come from template or compObj.fullClone()
+          if (frameEle && !frameEle.props) // invalid frame element
+            frameEle = null;
         }
         
         if (this.props.children) {
-          var b = React.Children.toArray(this.props.children); // not use childElements_()
+          var b = children2Arr_(this.props.children); // not use childElements_()
           bodyEle = b[0];  // must pass one child (panel/unit/paragraph) for utils.popWin.showWindow()
         }
         gui.compIdx = {};
@@ -12606,8 +11691,8 @@ class TMaskPanel_ extends TPanel_ {
         // step 2: try add frame widget
         var stWd = this.state.width, stHi = this.state.height;
         if (frameEle) {
-          var iWd = parsePercent(dFrame.width || 0.9,stWd,60);
-          var iHi = parsePercent(dFrame.height || 0.9,stHi,60);
+          var iWd = parsePercent(dFrame.width || 0.9,stWd,4);
+          var iHi = parsePercent(dFrame.height || 0.9,stHi,4);
           var iLeft = parseLeftTop(dFrame.left,stWd,iWd);
           var iTop = parseLeftTop(dFrame.top,stHi,iHi);
           var dStyle_ = Object.assign({},frameEle.props.style, {
@@ -12619,18 +11704,18 @@ class TMaskPanel_ extends TPanel_ {
           };
           
           gui.compIdx['0'] = 0;
-          gui.comps.push(React.cloneElement(frameEle,dProp_));
+          gui.comps.push(reactClone_(frameEle,dProp_));
         }
         
         // step 3: try set default frame style if popOption.frame not passed
-        var iWd2 = parsePercent(popOption.width || 0.8,stWd,40);
-        var iHi2 = parsePercent(popOption.height || 0.8,stHi,40);
+        var iWd2 = parsePercent(popOption.width || 0.8,stWd,6);
+        var iHi2 = parsePercent(popOption.height || 0.8,stHi,6);
         var iLeft2 = parseLeftTop(popOption.left,stWd,iWd2);
         var iTop2 = parseLeftTop(popOption.top,stHi,iHi2);
         
-        if (noFrame && iLeft2 > 0 && iTop2 > 0 && iLeft2 + iWd2 < stWd && iTop2 + iHi2 < stHi) {
+        if (!frameEle && iLeft2 > 0 && iTop2 > 0 && iLeft2 + iWd2 < stWd && iTop2 + iHi2 < stHi) {
           var iLeft3 = iLeft2-1, iTop3 = iTop2-1;
-          frameEle = React.createElement('div',{key:'0', style: {
+          frameEle = reactCreate_('div',{key:'0', style: {
             position:'absolute', zIndex:'auto',
             left:iLeft3+'px', top:iTop3+'px',
             width:iWd2+'px', height:iHi2+'px',
@@ -12656,13 +11741,28 @@ class TMaskPanel_ extends TPanel_ {
         if (popOption.bodyStyle) Object.assign(dStyle2_,popOption.bodyStyle);
         var dProp2_ = { 'hookTo.':hookOwner, 'keyid.':keyid, key:sKey, style:dStyle2_,
           left:iLeft2, top:iTop2, width:iWd2, height:iHi2,
+          $onClick:noPropagation,
         };
         
-        var bodyEle2 = React.cloneElement(bodyEle,dProp2_);
+        var bodyEle2 = reactClone_(bodyEle,dProp2_);
         gui.compIdx[sKey] = gui.comps.length;
         gui.winComp = gui.comps.push(bodyEle2) - 1;
         if (popOption.state)
           popOption.state.opened = true;
+        
+        this.setEvent( { $onClick: function(event) {
+            event.stopPropagation();
+            if (W.__design__ || popOption.manualClose) return;
+            
+            setTimeout( function() {
+              utils.popWin.popWindow();  // retData=undefined, callback=undefined
+            },100);
+          },
+          $onDblClick: noPropagation,
+          $onMouseDown: noPropagation, $onMouseMove: noPropagation, $onMouseUp: noPropagation,
+          $onKeyPress: noPropagation, $onKeyDown: noPropagation, $onKeyUp: noPropagation,
+          $onDragOver: noPropagation, $onDrop: noPropagation,
+        });
       }
     });
     
@@ -12692,44 +11792,20 @@ class TMaskPanel_ extends TPanel_ {
   componentDidMount() {
     super.componentDidMount();
     
-    var node = ReactDOM.findDOMNode(this);
-    if (node) {  // use html-event because design-GUI uses origianl DOM+JS, all html-event run before react-event
-      var winIdx = this.$gui.winComp;
-      var ele = typeof winIdx == 'number'? this.$gui.comps[winIdx]: null;
-      if (W.__design__ || !ele)
+    if (W.__design__) {
+      var node = findDomNode_(this);
+      if (node) {  // use html-event because design-GUI uses origianl DOM+JS, all html-event run before react-event
         node.onclick = noPropagation;
-      else {
-        var sKey = getElementKey_(ele);
-        var winObj = this.widget && sKey && this.widget[sKey]; // get window widget in children
-        winObj = winObj && winObj.component;
-        var winNode = winObj && ReactDOM.findDOMNode(winObj);
-        if (winNode) winNode.onclick = noPropagation; // avoid click window area leading to close
-        
-        var byManual = this.state.popOption;
-        byManual = byManual && byManual.manualClose;
-        node.onclick = function(event) {
-          event.stopPropagation();
-          if (byManual) return;
-          
-          setTimeout( function() {
-            utils.popWin.popWindow();  // retData=undefined, callback=undefined
-          },0);
-        };
+        node.ondblclick = noPropagation;
+        node.onmousedown = noPropagation;
+        node.onmousemove = noPropagation;
+        node.onmouseup = noPropagation;
+        node.onkeypress = noPropagation;
+        node.onkeydown = noPropagation;
+        node.onkeyup = noPropagation;
+        node.ondragover = noPropagation;
+        node.ondrop = noPropagation;
       }
-      
-      node.ondblclick = noPropagation;
-      node.onmousedown = noPropagation;
-      node.onmousemove = noPropagation;
-      node.onmouseup = noPropagation;
-      node.onkeypress = noPropagation;
-      node.onkeydown = noPropagation;
-      node.onkeyup = noPropagation;
-      node.ondragover = noPropagation;
-      node.ondrop = noPropagation;
-    }
-    
-    function noPropagation(event) {
-      event.stopPropagation();
     }
   }
   
@@ -12778,6 +11854,62 @@ function shadowWtcTagFlag_() {
     });
   }
 }
+creator.scanWtcFlag = shadowWtcTagFlag_;
+
+function scanPreCode_(htmlNode,sPrefix) {
+  var bRet = [], bStatic = [];
+  for (var i=0,node; node = htmlNode.children[i]; i++) {
+    var bInfo = creator.scanNodeAttr(node,sPrefix,i);
+    if (!bInfo) {
+      if (node.classList.contains('rewgt-static')) {
+        for (var i2=0,node2; node2=node.childNodes[i2]; i2++) {
+          bStatic.push(node2);  // includes text node
+        }
+      }
+      else bStatic.push(node);
+      continue;  // ignore all none '$=xx' node
+    }
+    
+    var sTemplate = bInfo[0], dProp = bInfo[1];
+    if (sTemplate == 'RefDiv')
+      bRet.push(reactCreate_(RefDiv__,dProp));
+    else if (sTemplate == 'RefSpan')
+      bRet.push(reactCreate_(RefSpan__,dProp));
+    else {  // is WTC
+      var ch, bSeg = sTemplate.split('.');
+      if (bSeg.length == 1 && (ch=sTemplate[0]) >= 'a' && ch <= 'z') { // html tag, such as: div button
+        var sHtml = dProp['html.'] || null;
+        delete dProp['html.']; delete dProp['isPre.'];
+        bRet.push(reactCreate_(wtcCls,dProp,sHtml)); // only scan one level for pure react element
+      }
+      else {
+        var clsSet = getWTC_(sTemplate), sName = bSeg.pop(), wtcCls = clsSet[sName];
+        var sPrefix2 = sPrefix + '[' + i + '].' + sTemplate;
+        if (!wtcCls) {
+          console.log('error: can not find WTC (' + sPrefix2 + ')');
+          continue;
+        }
+        
+        var sTag = node.nodeName, bChild_ = [];
+        if (sTag == 'DIV' || sTag == 'SPAN')
+          bChild_ = scanPreCode_(node,sPrefix2); // if no child, result is []
+        bChild_.unshift(wtcCls,dProp);
+        bRet.push(reactCreate_.apply(null,bChild_));
+      }
+    }
+  }
+  
+  if (bRet.length == 0 && bStatic.length) { // no need set 'hasStatic.', scaned from MarkedDiv node
+    var idx = W.$staticNodes.push(bStatic) - 1; // use W.$staticNodes, not local
+    bRet.push( reactCreate_('div',
+      {className:'rewgt-static',name:idx+'','data-marked':'1'}
+    )); // use data-marked to avoid online editing
+  }
+  return bRet;
+}
+creator.scanPreCode = scanPreCode_;
+
+var re_autoname_ = /^auto[0-9]+$/;
 
 function renewMarkdown_(compObj,mdText,callback) {
   var gui = compObj.$gui, isTable = compObj.props['markedTable.'], notShow = compObj.props.noShow;
@@ -12860,7 +11992,7 @@ function renewMarkdown_(compObj,mdText,callback) {
         
         var keyid, keyIdx = gui.comps.length, sKey = dProp.key;
         var namedKey = '', registKey = '';
-        if (!sKey || typeof sKey != 'string' || sKey.search(/^auto[0-9]+$/) == 0) { // take 'autoN' as none-define
+        if (!sKey || typeof sKey != 'string' || sKey.search(re_autoname_) == 0) { // take 'autoN' as none-define
           registKey = keyid = 'auto' + (keyIdx + gui.removeNum);
           if (!isWTC)  // is linker
             sKey = keyid = '$' + keyid;
@@ -12878,7 +12010,7 @@ function renewMarkdown_(compObj,mdText,callback) {
           dProp.key = sKey;
           var sHtml = dProp['html.'] || null;
           delete dProp['html.']; delete dProp['isPre.'];
-          ele = React.createElement(wtcCls,dProp,sHtml); // only scan one level
+          ele = reactCreate_(wtcCls,dProp,sHtml); // only scan one level
         }
         else {
           Object.assign(dProp,{'hookTo.':compObj.widget, 'keyid.':keyid, key:sKey});
@@ -12890,14 +12022,14 @@ function renewMarkdown_(compObj,mdText,callback) {
           
           var bChild_ = [];
           if (sTag == 'DIV')  // ignore sub node of <pre>, we only using node.innerHTML for that
-            bChild_ = scanPreCode(node,'['+i+'].'+sTemplate);
+            bChild_ = scanPreCode_(node,'['+i+'].'+sTemplate);
           if (childCls) {
             bChild_.unshift(childCls,childProp);
-            bChild_ = [React.createElement.apply(null,bChild_)];
+            bChild_ = [reactCreate_.apply(null,bChild_)];
           }
           
           bChild_.unshift(wtcCls,dProp);
-          ele = React.createElement.apply(null,bChild_);
+          ele = reactCreate_.apply(null,bChild_);
         }
         
         gui.compIdx[sKey] = keyIdx;
@@ -12921,7 +12053,7 @@ function renewMarkdown_(compObj,mdText,callback) {
             bList = [];
           }
           if (sTag == 'HR') {    // new table row
-            var ele = React.createElement('hr',{'markedRow.':true});
+            var ele = reactCreate_('hr',{'markedRow.':true});
             gui.comps.push(ele); // no need hook  // no need add to gui.compIdx
             
             if (isTable) {
@@ -12946,58 +12078,6 @@ function renewMarkdown_(compObj,mdText,callback) {
         callback(true,regNode);
       },0);
     }
-    
-    function scanPreCode(htmlNode,sPrefix) {
-      var bRet = [], bStatic = [];
-      for (var i=0,node; node = htmlNode.children[i]; i++) {
-        var bInfo = creator.scanNodeAttr(node,sPrefix,i);
-        if (!bInfo) {
-          if (node.classList.contains('rewgt-static')) {
-            for (var i2=0,node2; node2=node.childNodes[i2]; i2++) {
-              bStatic.push(node2);  // includes text node
-            }
-          }
-          else bStatic.push(node);
-          continue;  // ignore all none '$=xx' node
-        }
-        
-        var sTemplate = bInfo[0], dProp = bInfo[1];
-        if (sTemplate == 'RefDiv')
-          bRet.push(React.createElement(RefDiv__,dProp));
-        else if (sTemplate == 'RefSpan')
-          bRet.push(React.createElement(RefSpan__,dProp));
-        else {  // is WTC
-          var ch, bSeg = sTemplate.split('.');
-          if (bSeg.length == 1 && (ch=sTemplate[0]) >= 'a' && ch <= 'z') { // html tag, such as: div button
-            var sHtml = dProp['html.'] || null;
-            delete dProp['html.']; delete dProp['isPre.'];
-            bRet.push(React.createElement(wtcCls,dProp,sHtml)); // only scan one level for pure react element
-          }
-          else {
-            var clsSet = getWTC_(sTemplate), sName = bSeg.pop(), wtcCls = clsSet[sName];
-            var sPrefix2 = sPrefix + '[' + i + '].' + sTemplate;
-            if (!wtcCls) {
-              console.log('error: can not find WTC (' + sPrefix2 + ')');
-              continue;
-            }
-            
-            var sTag = node.nodeName, bChild_ = [];
-            if (sTag == 'DIV' || sTag == 'SPAN')
-              bChild_ = scanPreCode(node,sPrefix2); // if no child, result is []
-            bChild_.unshift(wtcCls,dProp);
-            bRet.push(React.createElement.apply(null,bChild_));
-          }
-        }
-      }
-      
-      if (bRet.length == 0 && bStatic.length) { // no need set 'hasStatic.', scaned from MarkedDiv node
-        var idx = W.$staticNodes.push(bStatic) - 1; // use W.$staticNodes, not local
-        bRet.push( React.createElement('div',
-          {className:'rewgt-static',name:idx+'','data-marked':'1'}
-        )); // use data-marked to avoid online editing
-      }
-      return bRet;
-    }
   }
   
   function AddOneStatic(gui,bList) {
@@ -13008,7 +12088,7 @@ function renewMarkdown_(compObj,mdText,callback) {
     var dProp = {className:'rewgt-static', name:sName, key:sKey};
     
     gui.compIdx[sKey] = keyIdx;
-    gui.comps.push(React.createElement('div',dProp));
+    gui.comps.push(reactCreate_('div',dProp));
     gui.statics[sName] = bList;
   }
 }
@@ -13044,7 +12124,7 @@ class TMarkedDiv_ extends TDiv_ {
   _getGroupOpt(self) {
     var dOpt = { type: 'mono', // mono, extend
       editable: 'none',        // all, some, none // 'some' means can not remove sub-level widget
-      baseUrl: '/app/files/rewgt/web', tools: [],
+      baseUrl: creator.appBase(), tools: [],
     };
     var wdgt = self.widget;
     if (!wdgt || !self.isHooked) // widget not ready yet, dOpt.tools is empty
@@ -13205,7 +12285,7 @@ class TMarkedDiv_ extends TDiv_ {
     if (this.props.noShow) bChild = null;
     
     var props = setupRenderProp_(this);
-    return React.createElement(this.props['tagName.'],props,bChild); // not use 'html.'
+    return reactCreate_(this.props['tagName.'],props,bChild); // not use 'html.'
   }
 }
 
@@ -13240,10 +12320,10 @@ class TMarkedTable_ extends TMarkedDiv_ {
     var bChild = this.prepareState();  // bChild is new copied
     var props = setupRenderProp_(this);
     if (this.props.noShow)             // not show content, only use duals.nodes
-      return React.createElement('div',props);
+      return reactCreate_('div',props);
     
     if (bChild.length == 0)            // at least define one cell
-      bChild.push(React.createElement(P__,{'html.':' '}));
+      bChild.push(reactCreate_(P__,{'html.':' '}));
     
     var bRow = ['tbody',null], lastRow = null;
     var self = this, firstScan = this.firstScan;
@@ -13252,7 +12332,7 @@ class TMarkedTable_ extends TMarkedDiv_ {
     bChild.forEach( function(child) {
       if (child.props['markedRow.']) {
         if (lastRow)
-          bRow.push(React.createElement.apply(null,lastRow));
+          bRow.push(reactCreate_.apply(null,lastRow));
         lastRow = ['tr',null];
       }
       else {
@@ -13286,13 +12366,13 @@ class TMarkedTable_ extends TMarkedDiv_ {
           tdProp = {key:cellKey,rowSpan:rowSpan,colSpan:colSpan}; // rowSpan colSpan maybe undefined, overwrite history
           if (tdStyle) tdProp.style = tdStyle;
         }
-        lastRow.push(React.createElement('td',tdProp,child));
+        lastRow.push(reactCreate_('td',tdProp,child));
       }
     });
-    if (lastRow) bRow.push(React.createElement.apply(null,lastRow));
+    if (lastRow) bRow.push(reactCreate_.apply(null,lastRow));
     
-    var tbody = React.createElement.apply(null,bRow);
-    return React.createElement('table',props,tbody);
+    var tbody = reactCreate_.apply(null,bRow);
+    return reactCreate_('table',props,tbody);
   }
 }
 

@@ -1,4 +1,4 @@
-// shadow-widget cdn ver 0.1.0
+// shadow-widget cdn ver 0.1.1
 // for cdn package of shadow-widget, exclude react & react-dom
 // package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ es2015 react ] ]
 
@@ -78,6 +78,9 @@ var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol
 
 var React = window.React || require('react');
 var ReactDOM = window.ReactDOM || require('react-dom');
+
+var createClass_ = React.createClass;
+if (!createClass_) console.log('fatal error: invalid React.createClass'); // before v15.5
 
 var widgetCount_ = 0;
 
@@ -330,6 +333,7 @@ if (Array.isArray(W)) extendWidget(W);else {
 }
 
 // W.$dataSrc = undefined; // undefined or {sPath:dInitProp}
+W.__debug__ = 0;
 W.$templates = {};
 W.$css = [];
 W.$main = { $$onLoad: [], $onReady: [], $onLoad: [], isReady: false, inRunning: false, inDesign: false, isStart: false };
@@ -1974,8 +1978,12 @@ utils.loadingEntry = function (require, module, exports) {
   var containNode_ = document.getElementById('react-container');
   if (!containNode_) return;
 
-  if (containNode_.hasAttribute('__debug__')) W.__debug__ = parseInt(containNode_.getAttribute('__debug__') || 0);
+  if (containNode_.hasAttribute('__debug__')) // if no '__debug__' prop, do nothing // maybe W.__debug__ assigned by JS
+    W.__debug__ = parseInt(containNode_.getAttribute('__debug__') || 0);
   if (containNode_.hasAttribute('__design__')) W.__design__ = parseInt(containNode_.getAttribute('__design__') || 0);
+  if (containNode_.hasAttribute('__nobinding__')) W.__nobinding__ = parseInt(containNode_.getAttribute('__nobinding__') || 0);
+  var noBinding = W.__nobinding__ || 0;
+
   if (window.W !== W) {
     // old window.W maybe only has W.$modules
     if (window.W) W.$modules = window.W.$modules; // main.js maybe included after react-widget
@@ -2239,7 +2247,7 @@ utils.loadingEntry = function (require, module, exports) {
         if (temp) return temp;
         temp = dTemplate2[sName];
         if (temp) {
-          temp = dTemplate[sName] = React.createClass(temp._extend());
+          temp = dTemplate[sName] = createClass_(temp._extend());
           return temp;
         }
       }
@@ -2258,9 +2266,9 @@ utils.loadingEntry = function (require, module, exports) {
         dTemplate2[sName] = temp; // cache original template
       } // else, assert(temp && isCustom), temp also is original template
 
-      if (isCustom) return React.createClass(temp._extend(shadowCls));else {
+      if (isCustom) return createClass_(temp._extend(shadowCls));else {
         // cache template extending
-        temp = dTemplate[sName] = React.createClass(temp._extend());
+        temp = dTemplate[sName] = createClass_(temp._extend());
         return temp;
       }
     }
@@ -2268,7 +2276,7 @@ utils.loadingEntry = function (require, module, exports) {
     function makeReactComp(bNode, parentHasNum) {
       var tempName = bNode[0],
           sPath = bNode[3];
-      var noDotNum = !parentHasNum && sPath && sPath.search(_dotNumPattern) < 0; // no .Number
+      var noDotNum = !noBinding && !parentHasNum && sPath && sPath.search(_dotNumPattern) < 0; // no .Number
       var temp = loadTemplate(tempName, sPath, noDotNum);
       if (!temp) return null;
 
@@ -2363,6 +2371,9 @@ function _defineProperty(obj, key, value) { if (key in obj) { Object.definePrope
 var React = window.React || require('react');
 var ReactDOM = window.ReactDOM || require('react-dom');
 
+var createClass_ = React.createClass;
+if (!createClass_) console.log('fatal error: invalid React.createClass'); // before v15.5
+
 var W = require('./react_widget');
 var T = W.$templates,
     utils = W.$utils,
@@ -2384,7 +2395,7 @@ var idSetter = W.$idSetter,
 })(window.location);
 
 utils.version = function () {
-  return '0.1.0';
+  return '0.1.1';
 };
 
 var vendorId_ = function (sUA) {
@@ -3041,7 +3052,7 @@ function getTemplate_(sName) {
     temp = temp[sAttr];
   }
   if (!temp || !temp._extend) W.$cachedClass[sName] = temp = null; // set null, no try next time
-  else W.$cachedClass[sName] = temp = React.createClass(temp._extend());
+  else W.$cachedClass[sName] = temp = createClass_(temp._extend());
   return temp;
 }
 
@@ -3074,14 +3085,14 @@ function getWTC_(cls) {
     if (temp) {
       if (isAll) {
         if (temp._extend) {
-          if (sLast) ret[sLast] = React.createClass(temp._extend());
+          if (sLast) ret[sLast] = createClass_(temp._extend());
         } else scanAllSub(ret, sPath, temp); // maybe sPath = ''
       } else {
         // !isAll, cls must be full path
         if (temp._extend) {
           var tmp = W.$cachedClass[cls];
           if (tmp !== null && sLast) {
-            if (!tmp) tmp = W.$cachedClass[cls] = React.createClass(temp._extend());
+            if (!tmp) tmp = W.$cachedClass[cls] = createClass_(temp._extend());
             ret[sLast] = tmp;
           }
         }
@@ -3109,7 +3120,7 @@ function getWTC_(cls) {
       var sPath_ = sPath ? sPath + '.' + item : item;
       var tmp = W.$cachedClass[sPath_];
       if (tmp !== null) {
-        if (!tmp) tmp = W.$cachedClass[sPath_] = React.createClass(temp_._extend());
+        if (!tmp) tmp = W.$cachedClass[sPath_] = createClass_(temp_._extend());
         ret[item] = tmp;
       }
     });
@@ -6144,14 +6155,14 @@ function dumpReactTree_(bRet, wdgt, sPath) {
       var bStated = shadowTemp[1],
           bSilent = shadowTemp[2];
       bStated.forEach(function (item) {
-        if (dProp.hasOwnProperty(item)) dProp[item] = objState[item];
+        if (dProp.hasOwnProperty(item)) // only fetch back items that in 'link.props'
+          dProp[item] = objState[item];
       });
       bSilent.forEach(function (item) {
         delete dProp[item];
       });
 
       Object.keys(dProp).forEach(function (item) {
-        // includes 'isPre.'
         if (dProp[item] === undefined) delete dProp[item]; // remove all 'undefined' value
       });
 
@@ -6183,7 +6194,8 @@ function dumpReactTree_(bRet, wdgt, sPath) {
       Object.assign(dProp, compObj.props);
       bStated.forEach(function (item) {
         // NOT take data-* aria-* as stated props
-        if (dProp.hasOwnProperty(item)) dProp[item] = objState[item];
+        // if (dProp.hasOwnProperty(item)) // maybe last time prop.xx is default
+        dProp[item] = objState[item];
       });
       bSilent.forEach(function (item) {
         delete dProp[item];
@@ -6514,7 +6526,7 @@ function loadReactTreeEx_(bRet, bTree, bStatic, dTempSet, sPrefix) {
         sAttr = b.shift();
     if (b.length == 0 && ((ch = sAttr[0]) < 'A' || ch > 'Z')) {
       iTagType = 1;
-      return sAttr; // React.createClass(sAttr); // such as: ['div',{}]
+      return sAttr; // createClass_(sAttr); // such as: ['div',{}]
     } else iTagType = 0;
 
     temp = T[sAttr];
@@ -6523,7 +6535,7 @@ function loadReactTreeEx_(bRet, bTree, bStatic, dTempSet, sPrefix) {
     }
     if (!temp || !temp._extend) dTempSet[sName] = temp = null; // set null, no try next time
     else {
-        if (shadowCls) temp = React.createClass(temp._extend(shadowCls));else dTempSet[sName] = temp = React.createClass(temp._extend());
+        if (shadowCls) temp = createClass_(temp._extend(shadowCls));else dTempSet[sName] = temp = createClass_(temp._extend());
       }
     return temp;
   }
@@ -8196,7 +8208,7 @@ var TWidget_ = function () {
         var temp = getTemplate_(this._className);
         if (!temp) console.log('fatal error: invalid WTC (' + this._className + ')');
         return temp;
-      } else return React.createClass(this._extend(defs));
+      } else return createClass_(this._extend(defs));
     }
   }, {
     key: '_getGroupOpt',
@@ -8954,7 +8966,7 @@ var TWidget_ = function () {
 
         if (isTopmost && oldNumId == 0) {
           compIdx['$pop'] = bComp.length + gui.removeNum;
-          bComp.push(reactCreate_(React.createClass(T.Panel._extend()), { 'hookTo.': hookThis, key: '$pop', 'keyid.': '$pop',
+          bComp.push(reactCreate_(createClass_(T.Panel._extend()), { 'hookTo.': hookThis, key: '$pop', 'keyid.': '$pop',
             left: 0, top: 0, width: 0, height: 0,
             style: { position: 'absolute', zIndex: 3016, overflow: 'visible' }
           }));
@@ -11474,7 +11486,7 @@ var TP_ = function (_TUnit_4) {
 
 T.P_ = TP_;
 T.P = new TP_();
-var P__ = React.createClass(T.P._extend());
+var P__ = createClass_(T.P._extend());
 
 var TNoscript_ = function (_TP_) {
   _inherits(TNoscript_, _TP_);
@@ -12234,7 +12246,7 @@ var TSpan_ = function (_TWidget_4) {
 
 T.Span_ = TSpan_;
 T.Span = new TSpan_();
-var Span__ = React.createClass(T.Span._extend());
+var Span__ = createClass_(T.Span._extend());
 
 var THiddenSpan_ = function (_TSpan_) {
   _inherits(THiddenSpan_, _TSpan_);
@@ -14315,7 +14327,7 @@ var TRefDiv_ = function (_TUnit_7) {
 
 T.RefDiv_ = TRefDiv_;
 T.RefDiv = new TRefDiv_();
-var RefDiv__ = creator.RefDiv__ = React.createClass(T.RefDiv._extend());
+var RefDiv__ = creator.RefDiv__ = createClass_(T.RefDiv._extend());
 
 var TRefSpan_ = function (_TSpan_16) {
   _inherits(TRefSpan_, _TSpan_16);
@@ -14371,7 +14383,7 @@ var TRefSpan_ = function (_TSpan_16) {
 
 T.RefSpan_ = TRefSpan_;
 T.RefSpan = new TRefSpan_();
-var RefSpan__ = creator.RefSpan__ = React.createClass(T.RefSpan._extend());
+var RefSpan__ = creator.RefSpan__ = createClass_(T.RefSpan._extend());
 
 // ScenePage
 //-----------------
@@ -14524,7 +14536,7 @@ var TScenePage_ = function (_TPanel_6) {
 
 T.ScenePage_ = TScenePage_;
 T.ScenePage = new TScenePage_();
-var ScenePage__ = React.createClass(T.ScenePage._extend());
+var ScenePage__ = createClass_(T.ScenePage._extend());
 
 // MaskablePanel
 //--------------
@@ -14716,7 +14728,7 @@ var TMaskPanel_ = function (_TPanel_7) {
   return TMaskPanel_;
 }(TPanel_);
 
-var MaskPanel__ = React.createClass(new TMaskPanel_()._extend());
+var MaskPanel__ = createClass_(new TMaskPanel_()._extend());
 
 // MarkedDiv
 //----------
@@ -14754,7 +14766,7 @@ function shadowWtcTagFlag_() {
 }
 creator.scanWtcFlag = shadowWtcTagFlag_;
 
-function scanPreCode_(htmlNode, sPrefix) {
+function scanPreCode_(htmlNode, sPrefix, canEditStatic) {
   var bRet = [],
       bStatic = [];
   for (var i = 0, node; node = htmlNode.children[i]; i++) {
@@ -14791,7 +14803,7 @@ function scanPreCode_(htmlNode, sPrefix) {
 
         var sTag = node.nodeName,
             bChild_ = [];
-        if (sTag == 'DIV' || sTag == 'SPAN') bChild_ = scanPreCode_(node, sPrefix2); // if no child, result is []
+        if (sTag == 'DIV' || sTag == 'SPAN') bChild_ = scanPreCode_(node, sPrefix2, canEditStatic); // if no child, result is []
         bChild_.unshift(wtcCls, dProp);
         bRet.push(reactCreate_.apply(null, bChild_));
       }
@@ -14801,7 +14813,9 @@ function scanPreCode_(htmlNode, sPrefix) {
   if (bRet.length == 0 && bStatic.length) {
     // no need set 'hasStatic.', scaned from MarkedDiv node
     var idx = W.$staticNodes.push(bStatic) - 1; // use W.$staticNodes, not local
-    bRet.push(reactCreate_('div', { className: 'rewgt-static', name: idx + '', 'data-marked': '1' })); // use data-marked to avoid online editing
+    var dProp2 = { className: 'rewgt-static', name: idx + '' };
+    if (!canEditStatic) dProp2['data-marked'] = '1'; // use data-marked to avoid online editing
+    bRet.push(reactCreate_('div', dProp2));
   }
   return bRet;
 }
@@ -14927,7 +14941,7 @@ function renewMarkdown_(compObj, mdText, callback) {
 
           var bChild_ = [];
           if (sTag == 'DIV') // ignore sub node of <pre>, we only using node.innerHTML for that
-            bChild_ = scanPreCode_(node, '[' + i + '].' + sTemplate);
+            bChild_ = scanPreCode_(node, '[' + i + '].' + sTemplate, false);
           if (childCls) {
             bChild_.unshift(childCls, childProp);
             bChild_ = [reactCreate_.apply(null, bChild_)];

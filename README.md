@@ -6,7 +6,7 @@ suports visual progaming also.
 
 ### Version state
 
-Current version: Beta 0.1.0   
+Current version: Beta 0.1.1   
 Document state: Only chinese manual is ready
 
 ### Install

@@ -3,6 +3,9 @@
 var React = window.React || require('react');
 var ReactDOM = window.ReactDOM || require('react-dom');
 
+var createClass_ = React.createClass;
+if (!createClass_) console.log('fatal error: invalid React.createClass'); // before v15.5
+
 var widgetCount_ = 0;
 
 function deepFirstFind(node,s) { // s is string, not int
@@ -274,6 +277,7 @@ else {
 }
 
 // W.$dataSrc = undefined; // undefined or {sPath:dInitProp}
+W.__debug__  = 0;
 W.$templates = {};
 W.$css       = [];
 W.$main      = { $$onLoad:[], $onReady:[], $onLoad:[], isReady:false, inRunning:false, inDesign:false, isStart:false };
@@ -2046,10 +2050,14 @@ utils.loadingEntry = function(require,module,exports) {
   var containNode_ = document.getElementById('react-container');
   if (!containNode_) return;
   
-  if (containNode_.hasAttribute('__debug__'))
+  if (containNode_.hasAttribute('__debug__'))  // if no '__debug__' prop, do nothing // maybe W.__debug__ assigned by JS
     W.__debug__  = parseInt(containNode_.getAttribute('__debug__') || 0);
   if (containNode_.hasAttribute('__design__'))
     W.__design__ = parseInt(containNode_.getAttribute('__design__') || 0);
+  if (containNode_.hasAttribute('__nobinding__'))
+    W.__nobinding__ = parseInt(containNode_.getAttribute('__nobinding__') || 0);
+  var noBinding = W.__nobinding__ || 0;
+  
   if (window.W !== W) { // old window.W maybe only has W.$modules
     if (window.W) W.$modules = window.W.$modules; // main.js maybe included after react-widget
     if (W.__debug__ || W.__design__)
@@ -2317,7 +2325,7 @@ utils.loadingEntry = function(require,module,exports) {
         if (temp) return temp;
         temp = dTemplate2[sName];
         if (temp) {
-          temp = dTemplate[sName] = React.createClass(temp._extend());
+          temp = dTemplate[sName] = createClass_(temp._extend());
           return temp;
         }
       }
@@ -2336,16 +2344,16 @@ utils.loadingEntry = function(require,module,exports) {
       }  // else, assert(temp && isCustom), temp also is original template
       
       if (isCustom)
-        return React.createClass(temp._extend(shadowCls));
+        return createClass_(temp._extend(shadowCls));
       else {  // cache template extending
-        temp = dTemplate[sName] = React.createClass(temp._extend());
+        temp = dTemplate[sName] = createClass_(temp._extend());
         return temp;
       }
     }
     
     function makeReactComp(bNode,parentHasNum) {
       var tempName = bNode[0], sPath = bNode[3];
-      var noDotNum = (!parentHasNum && sPath && sPath.search(_dotNumPattern) < 0);  // no .Number
+      var noDotNum = !noBinding && (!parentHasNum && sPath && sPath.search(_dotNumPattern) < 0);  // no .Number
       var temp = loadTemplate(tempName,sPath,noDotNum);
       if (!temp) return null;
       

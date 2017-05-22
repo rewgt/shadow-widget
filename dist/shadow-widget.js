@@ -1,4 +1,4 @@
-// shadow-widget cdn ver 0.1.1
+// shadow-widget cdn ver 0.1.2
 // for cdn package of shadow-widget, exclude react & react-dom
 // package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ es2015 react ] ]
 
@@ -2395,7 +2395,7 @@ var idSetter = W.$idSetter,
 })(window.location);
 
 utils.version = function () {
-  return '0.1.1';
+  return '0.1.2';
 };
 
 var vendorId_ = function (sUA) {
@@ -4265,7 +4265,7 @@ function findComponent_(comp, pathFlag, bInfo, parentIdx) {
               // go next segment
               if (typeof idx == 'number') iLastIdx = idx;else iLastIdx = undefined;
             } else {
-              // pathFlag == 0
+              // pathFlag >= 0
               if (parentNum == 0) {
                 // eval at comp directly, ignore forSpace, enter new segment // wdgt.$callspace must not $for
                 if (typeof idx == 'number') iLastIdx = idx;else iLastIdx = undefined;
@@ -4273,7 +4273,7 @@ function findComponent_(comp, pathFlag, bInfo, parentIdx) {
               // else, use last segment's index
             }
             if (bInfo) {
-              bInfo.unshift(pathFlag == 0 && parentNum != 0); // true means uses forSpace
+              bInfo.unshift(pathFlag >= 0 && parentNum != 0); // true means uses forSpace
               bInfo.unshift(wdgt.$callspace);
               bInfo.unshift(iLastIdx); // last props['for.index']
             }
@@ -4281,7 +4281,7 @@ function findComponent_(comp, pathFlag, bInfo, parentIdx) {
           } else pathFlag += 2;
         } else {
           // must not '$$for', can be $for=''
-          if (pathFlag == 0) {
+          if (pathFlag >= 0) {
             var flowFlag_ = wdgt.$callspace.flowFlag;
             if ((flowFlag_ == 'for' || flowFlag_ == 'for0') && parentNum == 0) {
               // ignore this $for callspace  // enter new segment
@@ -5465,7 +5465,7 @@ function syncProps_(comp) {
               if (sKey != 'data') {
                 // not 'dual-data'
                 var iFlag_ = supportedAttr_[sKey];
-                if (iFlag_ && iFlag_ != 5 && !bothPropDual) gui.tagAttrs.push(sKey);
+                if (iFlag_ && iFlag_ != 5) gui.tagAttrs.push(sKey);
               }
 
               var value_ = duals0[sKey] = comp.props[gui.dualAttrs[sKey]];
@@ -5621,25 +5621,6 @@ function syncProps_(comp) {
       while (duaItem = duals2.shift()) {
         duals[duaItem[0]] = duaItem[1]; // do this.duals.xxx = value before props re-assign
       }
-      Object.keys(duals).forEach(function (sKey) {
-        // if use props['$attr'], it must no props['attr']
-        // comp.props[expr] must be 'undefined' for :expr, so that must be driven from props[:expr]
-        var item = comp.props[sKey]; // can not pass props.id__
-        if (item === undefined) {
-          var sKey_ = gui.dualAttrs[sKey]; // attr --> dual-attr
-          if (sKey_) {
-            item = comp.props[sKey_]; // try get props['dual-*']
-            if (item === undefined) return;
-          } else return;
-        }
-
-        if (item !== duals0[sKey]) {
-          // props.attr has changed
-          duals0[sKey] = item; // record prop.xxx
-          duals[sKey] = item; // auto call 'comp.state.xxx = value' in setter
-          ret = true;
-        }
-      });
     }
 
     var exprAttrs2 = comp.state.exprAttrs,
@@ -5748,8 +5729,9 @@ function syncProps_(comp) {
                 var childEle,
                     childProp = { 'hookTo.': ownerWdgt, 'keyid.': keyid, key: keyid + '', 'for.index': idx };
                 if (forChild) {
-                  forChild.unshift(child, childProp);
-                  childEle = reactClone_.apply(null, forChild);
+                  // forChild can be: Element, bElementList, sTextString
+                  if (React.isValidElement(forChild) || typeof forChild == 'string') childEle = reactClone_(child, childProp, forChild);else // forChild must be Array
+                    childEle = reactClone_.apply(null, [child, childProp].concat(forChild));
                 } else childEle = reactClone_(child, childProp);
                 newCompIdx[keyid] = newComps.push(childEle) - 1;
               }
@@ -7835,22 +7817,22 @@ var supportedAttr_ = { // 5 reserved for special precessing
   accept: 1, acceptCharset: 1, accessKey: 1, action: 1, allowFullScreen: 1,
   allowTransparency: 1, alt: 1, async: 1, autoComplete: 1, autoFocus: 1,
   autoPlay: 1, capture: 1, cellPadding: 1, cellSpacing: 1, challenge: 1,
-  charSet: 1, checked: 1, classID: 1, colSpan: 1, cols: 1, content: 1,
+  charSet: 1, checked: 1, cite: 1, classID: 1, colSpan: 1, cols: 1, content: 1, // no className
   contentEditable: 1, contextMenu: 1, controls: 1, coords: 1, crossOrigin: 1,
   data: 1, dateTime: 1, 'default': 1, defer: 1, dir: 1, disabled: 1,
   download: 1, draggable: 1, encType: 1, form: 1, formAction: 1, formEncType: 1,
   formMethod: 1, formNoValidate: 1, formTarget: 1, frameBorder: 1, headers: 1,
-  hidden: 1, high: 1, href: 1, hrefLang: 1, htmlFor: 1, httpEquiv: 1, icon: 1,
+  hidden: 1, high: 1, href: 1, hrefLang: 1, htmlFor: 1, httpEquiv: 1, icon: 1, // no height
   id: 1, inputMode: 1, integrity: 1, 'is': 1, keyParams: 1, keyType: 1, kind: 1,
   label: 1, lang: 1, list: 1, loop: 1, low: 1, manifest: 1, marginHeight: 1,
   marginWidth: 1, max: 1, maxLength: 1, media: 1, mediaGroup: 1, method: 1,
   min: 1, minLength: 1, multiple: 1, muted: 1, name: 1, noValidate: 1,
   nonce: 1, open: 1, optimum: 1, pattern: 1, placeholder: 1, poster: 1,
-  preload: 1, radioGroup: 1, readOnly: 1, rel: 1, required: 1, reversed: 1,
-  role: 1, rowSpan: 1, rows: 1, sandbox: 1, scope: 1, scoped: 1, scrolling: 1,
-  seamless: 1, selected: 1, shape: 1, size: 1, sizes: 1, span: 1, spellCheck: 1,
-  src: 1, srcDoc: 1, srcLang: 1, srcSet: 1, start: 1, step: 1, summary: 1,
-  tabIndex: 1, target: 1, title: 1, type: 1, useMap: 1, value: 1, wmode: 1, wrap: 1,
+  preload: 1, profile: 1, radioGroup: 1, readOnly: 1, rel: 1, required: 1,
+  reversed: 1, role: 1, rowSpan: 1, rows: 1, sandbox: 1, scope: 1, scoped: 1,
+  scrolling: 1, seamless: 1, selected: 1, shape: 1, size: 1, sizes: 1, span: 1,
+  spellCheck: 1, src: 1, srcDoc: 1, srcLang: 1, srcSet: 1, start: 1, step: 1, summary: 1, // no style
+  tabIndex: 1, target: 1, title: 1, type: 1, useMap: 1, value: 1, wmode: 1, wrap: 1, // no width
 
   about: 2, datatype: 2, inlist: 2, prefix: 2, property: 2, resource: 2, 'typeof': 2, vocab: 2,
 
@@ -9002,6 +8984,31 @@ var TWidget_ = function () {
       return utils.shouldUpdate(this, nextProps, nextState);
     }
   }, {
+    key: 'componentWillReceiveProps',
+    value: function componentWillReceiveProps(nextProps) {
+      var gui = this.$gui,
+          duals = this.duals,
+          duals0 = gui.duals;
+      var b = Object.keys(duals);
+
+      for (var i = 0, sKey; sKey = b[i]; i++) {
+        // if use props['$attr'], it must no props['attr']
+        var item = nextProps[sKey]; // can not pass props.id__
+        if (item === undefined) {
+          // props[expr] must be 'undefined' for $expr
+          var sKey_ = gui.dualAttrs[sKey]; // attr --> dual-attr
+          if (sKey_) {
+            item = nextProps[sKey_]; // try props['dual-*']
+            if (item === undefined) continue;
+            // else, checking props['dual-*']
+          } else continue;
+        }
+
+        if (item !== duals0[sKey]) // props.attr has changed
+          duals[sKey] = duals0[sKey] = item; // record prop.xxx, and assign duals.xxx
+      }
+    }
+  }, {
     key: 'componentDidMount',
     value: function componentDidMount() {
       this.isHooked = !!this.widget;
@@ -9344,13 +9351,23 @@ var TWidget_ = function () {
   }, {
     key: 'componentOf',
     value: function componentOf(sPath) {
+      var tp = typeof sPath === 'undefined' ? 'undefined' : _typeof(sPath);
+      if (tp == 'number') {
+        var bInfo = [],
+            ownerObj = findComponent_(this, sPath, bInfo, 0);
+        if (!ownerObj || !bInfo[1]) {
+          // bInfo[1] is callspace
+          console.log('warning: locate callspace (' + sPath + ') failed.');
+          return null;
+        } else return ownerObj;
+      } else if (tp != 'string') return null;
+
       var ch = sPath[0];
       if (ch != '.' && ch != '/') {
         // find child directly
         var wdgt = this.widget,
-            targWdgt = wdgt && wdgt.W(sPath),
-            targObj = targWdgt && targWdgt.component;
-        return targObj || null;
+            targWdgt = wdgt && wdgt.W(sPath);
+        return targWdgt && targWdgt.component || null;
       } else return getCompByPath_(this, sPath);
     }
   }, {
@@ -9358,29 +9375,32 @@ var TWidget_ = function () {
     value: function elementOf(sPath) {
       var ch,
           headWdgt = null,
-          sTail = '';
-      if (!sPath) {
-        headWdgt = this.widget; // sTail = '';
-      } else if ((ch = sPath[0]) != '.' && ch != '/') {
-        headWdgt = this.widget;
-        sTail = sPath;
-      } else {
-        var iPos = sPath.lastIndexOf('./');
-        if (iPos >= 0) {
-          var comp = this.componentOf(sPath.slice(0, iPos + 2));
-          if (!comp) return null;
-          headWdgt = comp.widget;
-          sTail = sPath.slice(iPos + 2);
-        } else if (ch == '.') {
-          // absolute path
-          headWdgt = W;
-          sTail = sPath.slice(1);
-          if (!sTail) return null;
-        } else if (ch == '/' && sPath[1] == '/') {
-          var ownerObj = this.parentOf();
-          return ownerObj ? ownerObj.elementOf(sPath.slice(2)) : null;
-        } else return null; // unknown format
-      }
+          sTail = '',
+          tp = typeof sPath === 'undefined' ? 'undefined' : _typeof(sPath);
+      if (tp == 'number') {
+        headWdgt = this.componentOf(sPath);
+        headWdgt = headWdgt && headWdgt.widget; // sTail = '';
+      } else if (!sPath) headWdgt = this.widget; // sTail = '';
+      else if (tp != 'string') return null;else if ((ch = sPath[0]) != '.' && ch != '/') {
+          headWdgt = this.widget;
+          sTail = sPath;
+        } else {
+          var iPos = sPath.lastIndexOf('./');
+          if (iPos >= 0) {
+            var comp = this.componentOf(sPath.slice(0, iPos + 2));
+            if (!comp) return null;
+            headWdgt = comp.widget;
+            sTail = sPath.slice(iPos + 2);
+          } else if (ch == '.') {
+            // absolute path
+            headWdgt = W;
+            sTail = sPath.slice(1);
+            if (!sTail) return null;
+          } else if (ch == '/' && sPath[1] == '/') {
+            var ownerObj = this.parentOf();
+            return ownerObj ? ownerObj.elementOf(sPath.slice(2)) : null;
+          } else return null; // unknown format
+        }
 
       if (!headWdgt) return null;
       if (!sTail) {
@@ -12454,6 +12474,22 @@ var TTextarea_ = function (_TSpan_5) {
       props['tagName.'] = 'textarea';
       return props;
     }
+  }, {
+    key: 'getInitialState',
+    value: function getInitialState() {
+      var dState = _get(TTextarea_.prototype.__proto__ || Object.getPrototypeOf(TTextarea_.prototype), 'getInitialState', this).call(this);
+
+      if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue');
+      if (this.props.value === undefined) this.defineDual('value');
+
+      return dState;
+    }
+  }, {
+    key: '$$onChange',
+    value: function $$onChange(event) {
+      this.duals.value = event.target.value;
+      if (this.$onChange) this.$onChange(event);
+    }
   }]);
 
   return TTextarea_;
@@ -12604,7 +12640,9 @@ var TInput_ = function (_TSpan_9) {
         step: [iLevel + 9, 'string'],
         pattern: [iLevel + 10, 'string'],
         src: [iLevel + 11, 'string'],
-        required: [iLevel + 12, 'string', ['', 'required']]
+        defaultValue: [iLevel + 12, 'string'],
+        defaultChecked: [iLevel + 13, 'string'],
+        required: [iLevel + 14, 'string', ['', 'required']]
       });
       return dSchema;
     }
@@ -12617,9 +12655,24 @@ var TInput_ = function (_TSpan_9) {
       return props;
     }
   }, {
+    key: 'getInitialState',
+    value: function getInitialState() {
+      var dState = _get(TInput_.prototype.__proto__ || Object.getPrototypeOf(TInput_.prototype), 'getInitialState', this).call(this);
+      if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue'); // take as duals.defaultValue
+      if (this.props.defaultChecked !== undefined) this.$gui.tagAttrs.push('defaultChecked'); // take as duals.defaultChecked
+
+      if (this.props.value === undefined) {
+        var sType = this.props.type;
+        if (sType !== 'checkbox' && sType !== 'radio') this.defineDual('value'); // force regist duals.value
+      }
+
+      return dState;
+    }
+  }, {
     key: '$$onChange',
     value: function $$onChange(event) {
-      this.setState({ value: event.target.value });
+      var sType = this.props.type;
+      if (sType === 'checkbox' || sType === 'radio') this.duals.checked = event.target.checked;else this.duals.value = event.target.value;
       if (this.$onChange) this.$onChange(event);
     }
   }]);
@@ -12696,6 +12749,22 @@ var TSelect_ = function (_TSpan_11) {
       var props = _get(TSelect_.prototype.__proto__ || Object.getPrototypeOf(TSelect_.prototype), 'getDefaultProps', this).call(this);
       props['tagName.'] = 'select';
       return props;
+    }
+  }, {
+    key: 'getInitialState',
+    value: function getInitialState() {
+      var dState = _get(TSelect_.prototype.__proto__ || Object.getPrototypeOf(TSelect_.prototype), 'getInitialState', this).call(this);
+
+      if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue');
+      if (this.props.value === undefined) this.defineDual('value');
+
+      return dState;
+    }
+  }, {
+    key: '$$onChange',
+    value: function $$onChange(event) {
+      this.duals.value = event.target.value;
+      if (this.$onChange) this.$onChange(event);
     }
   }]);
 
@@ -13832,13 +13901,19 @@ var TOptInput_ = function (_TOptSpan_5) {
   }, {
     key: 'getInitialState',
     value: function getInitialState() {
-      var dState = _get(TOptInput_.prototype.__proto__ || Object.getPrototypeOf(TOptInput_.prototype), 'getInitialState', this).call(this),
-          gui = this.$gui;
+      var dState = _get(TOptInput_.prototype.__proto__ || Object.getPrototypeOf(TOptInput_.prototype), 'getInitialState', this).call(this);
+
+      if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue'); // data-checked should replace duals.defaultChecked
+      if (this.props.value === undefined) {
+        var sType = this.props.type;
+        if (sType !== 'checkbox' && sType !== 'radio') this.defineDual('value'); // force regist duals.value
+      }
 
       this.defineDual('data-checked', function (value, oldValue) {
         var sValue = value === 'false' || value === '0' || !value ? '' : '1';
         this.state.checked = sValue; // not use duals.checked = xx
       });
+
       return dState;
     }
   }, {
@@ -13855,13 +13930,11 @@ var TOptInput_ = function (_TOptSpan_5) {
     value: function $$onChange(event) {
       if (W.__design__) event.stopPropagation();
 
-      var sType = this.state.type;
+      var sType = this.state.type,
+          targ = event.target;
       if (sType === 'checkbox' || sType === 'radio') {
-        var targ = findDomNode_(this);
-        if (targ) {
-          if (targ.checked) this.setChecked(null);else this.clearChecked(targ);
-        }
-      }
+        if (targ.checked) this.setChecked(null);else this.clearChecked(targ);
+      } else this.duals.value = targ.value;
 
       if (this.$onChange) this.$onChange(event);
     }
@@ -13998,7 +14071,7 @@ function checkForIfElse_(gui) {
 }
 
 function templateElement_(thisObj, sPath) {
-  if (!sPath) return null; // can not get template's element
+  if (!sPath || typeof sPath != 'string') return null; // can not get template's element
 
   var ch = sPath[0];
   if (ch != '.' && ch != '/') {

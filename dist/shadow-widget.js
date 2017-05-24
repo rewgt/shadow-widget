@@ -1,4 +1,4 @@
-// shadow-widget cdn ver 0.1.2
+// shadow-widget cdn ver 0.1.3
 // for cdn package of shadow-widget, exclude react & react-dom
 // package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ es2015 react ] ]
 
@@ -81,6 +81,72 @@ var ReactDOM = window.ReactDOM || require('react-dom');
 
 var createClass_ = React.createClass;
 if (!createClass_) console.log('fatal error: invalid React.createClass'); // before v15.5
+
+if (!Object.assign) {
+  // polyfill function
+  Object.assign = function () {
+    var len = arguments.length;
+    if (len < 1) return {};
+
+    var res = arguments[0];
+    if ((typeof res === 'undefined' ? 'undefined' : _typeof(res)) != 'object') res = {};
+
+    for (var i = 1; i < len; i += 1) {
+      var obj = arguments[i];
+      if ((typeof obj === 'undefined' ? 'undefined' : _typeof(obj)) != 'object') continue;
+
+      var keys = Object.keys(obj);
+      for (var j = 0, item; item = keys[j]; j += 1) {
+        res[item] = obj[item];
+      }
+    }
+
+    return res;
+  };
+}
+
+if (!Array.prototype.findIndex) {
+  // polyfill function
+  Array.prototype.findIndex = function (predicate) {
+    // 1. Let O be ? ToObject(this value).
+    if (this == null) {
+      throw new TypeError('"this" is null or not defined');
+    }
+
+    var o = Object(this);
+
+    // 2. Let len be ? ToLength(? Get(O, "length")).
+    var len = o.length >>> 0;
+
+    // 3. If IsCallable(predicate) is false, throw a TypeError exception.
+    if (typeof predicate !== 'function') {
+      throw new TypeError('predicate must be a function');
+    }
+
+    // 4. If thisArg was supplied, let T be thisArg; else let T be undefined.
+    var thisArg = arguments[1];
+
+    // 5. Let k be 0.
+    var k = 0;
+
+    // 6. Repeat, while k < len
+    while (k < len) {
+      // a. Let Pk be ! ToString(k).
+      // b. Let kValue be ? Get(O, Pk).
+      // c. Let testResult be ToBoolean.
+      // d. If testResult is true, return k.
+      var kValue = o[k];
+      if (predicate.call(thisArg, kValue, k, o)) {
+        return k;
+      }
+      // e. Increase k by 1.
+      k++;
+    }
+
+    // 7. Return -1.
+    return -1;
+  };
+}
 
 var widgetCount_ = 0;
 
@@ -2395,7 +2461,7 @@ var idSetter = W.$idSetter,
 })(window.location);
 
 utils.version = function () {
-  return '0.1.2';
+  return '0.1.3';
 };
 
 var vendorId_ = function (sUA) {
@@ -2556,7 +2622,7 @@ function keyOfNode_(node) {
       };
     } else {
       for (var sKey in node) {
-        if (sKey.startsWith('__reactInternalInstance$')) {
+        if (sKey.indexOf('__reactInternalInstance$') == 0) {
           internalDomKey_ = sKey;
           break;
         }
@@ -6881,7 +6947,7 @@ function streamReactTree_(bTree, iLevel, iOwnerFlag) {
     }
 
     if (iFlag == 3) {
-      if (subRet.startsWith(sHeadSpace + '  ')) sRet += '>' + subRet.slice(sHeadSpace.length + 2);else sRet += '>' + subRet;
+      if (subRet.indexOf(sHeadSpace + '  ') == 0) sRet += '>' + subRet.slice(sHeadSpace.length + 2);else sRet += '>' + subRet;
     } else sRet += '>\n' + subRet;
   } else {
     sRet += '>';
@@ -9112,7 +9178,7 @@ var TWidget_ = function () {
           this.setState(data2, callback);
         }
       } else {
-        console.log('warning: reRender() failed when component unhooked.');
+        if (this.state.id__ != 1) console.log('warning: reRender() failed when component unhooked.');
         if (callback) callback();
       }
     }
@@ -10529,7 +10595,7 @@ var TSplitDiv_ = function (_TUnit_) {
         var initStyle = { cursor: inRow ? 'ew-resize' : 'ns-resize' };
         var hasBackground = false;
         for (var sKey in dState.style) {
-          if (sKey.startsWith('background')) {
+          if (sKey.indexOf('background') == 0) {
             hasBackground = true;
             break;
           }
@@ -13057,8 +13123,12 @@ var TNavPanel_ = function (_TPanel_3) {
         var ownerObj = wdgt.component;
         if (ownerObj) {
           if (ownerObj.props['isOption.']) {
-            ret.push(ownerObj);
-            if (withKey && withKey === ownerObj.$gui.keyid) return true; // quit
+            if (withKey) {
+              if (withKey === ownerObj.$gui.keyid) {
+                ret.push(ownerObj);
+                return true; // quit
+              }
+            } else ret.push(ownerObj);
           } else if (ownerObj.props['isNavigator.']) return false; // quit, not scan sub level of NavXX
           else {
               var comps = ownerObj.$gui.comps,
@@ -13412,6 +13482,15 @@ function trySyncUncheck_(self, ownerObj) {
 }
 
 function setOptChecked_(self, callback, newOpt, isForce) {
+  function delayCallback(bTime) {
+    var iWait = bTime.shift();
+    if (iWait) {
+      setTimeout(function () {
+        if (self.state['data-checked']) callback();else delayCall(bTime);
+      }, iWait);
+    } else callback(); // force callback
+  }
+
   var popOption = self.state.popOption;
   if (popOption) {
     if (!popOption.state || !popOption.state.opened) {
@@ -13427,11 +13506,7 @@ function setOptChecked_(self, callback, newOpt, isForce) {
 
   if (!self.state['data-checked']) {
     self.duals['data-checked'] = '1'; // redirect to duals['data-checked'] = '1'
-    if (callback) {
-      setTimeout(function () {
-        callback();
-      }, 0);
-    }
+    if (callback) delayCallback([100, 100, 100]); // max wait 300 ms, if not ready force callback
     return;
   }
 
@@ -14156,7 +14231,7 @@ var TTempPanel_ = function (_TPanel_5) {
       var style_ = this.props.style;
       if (this.props['hookTo.'] === topmostWidget_) {
         this.duals.style = style_ = Object.assign({}, style_, { position: 'absolute' });
-        if ((this.$gui.keyid + '').startsWith('$$')) this.isLibGui = true;
+        if ((this.$gui.keyid + '').indexOf('$$') == 0) this.isLibGui = true;
       }
 
       if (W.__design__ && !this.isLibGui) {
@@ -14238,7 +14313,7 @@ var TTempDiv_ = function (_TUnit_6) {
       var style_ = this.props.style;
       if (this.props['hookTo.'] === topmostWidget_) {
         this.duals.style = style_ = Object.assign({}, style_, { position: 'absolute' });
-        if ((this.$gui.keyid + '').startsWith('$$')) this.isLibGui = true;
+        if ((this.$gui.keyid + '').indexOf('$$') == 0) this.isLibGui = true;
       }
 
       if (W.__design__ && !this.isLibGui) {

@@ -24,7 +24,7 @@ var idSetter = W.$idSetter, creator = W.$creator;
 })(window.location);
 
 utils.version = function() {
-  return '0.1.2';
+  return '0.1.3';
 };
 
 var vendorId_ = (function(sUA) {
@@ -194,7 +194,7 @@ function keyOfNode_(node) {
     }
     else {
       for (var sKey in node) {
-        if (sKey.startsWith('__reactInternalInstance$')) {
+        if (sKey.indexOf('__reactInternalInstance$') == 0) {
           internalDomKey_ = sKey;
           break;
         }
@@ -4605,7 +4605,7 @@ function streamReactTree_(bTree,iLevel,iOwnerFlag) {
     }
     
     if (iFlag == 3) {
-      if (subRet.startsWith(sHeadSpace + '  '))
+      if (subRet.indexOf(sHeadSpace + '  ') == 0)
         sRet += ('>' + subRet.slice(sHeadSpace.length+2));
       else sRet += ('>' + subRet);
     }
@@ -6861,7 +6861,8 @@ class TWidget_ {
       }
     }
     else {
-      console.log('warning: reRender() failed when component unhooked.');
+      if (this.state.id__ != 1)
+        console.log('warning: reRender() failed when component unhooked.');
       if (callback) callback();
     }
   }
@@ -8232,7 +8233,7 @@ class TSplitDiv_ extends TUnit_ {
       var initStyle = {cursor:inRow?'ew-resize':'ns-resize'};
       var hasBackground = false;
       for (var sKey in dState.style) {
-        if (sKey.startsWith('background')) {
+        if (sKey.indexOf('background') == 0) {
           hasBackground = true;
           break;
         }
@@ -10377,9 +10378,13 @@ class TNavPanel_ extends TPanel_ {
       var ownerObj = wdgt.component;
       if (ownerObj) {
         if (ownerObj.props['isOption.']) {
-          ret.push(ownerObj);
-          if (withKey && withKey === ownerObj.$gui.keyid)
-            return true; // quit
+          if (withKey) {
+            if (withKey === ownerObj.$gui.keyid) {
+              ret.push(ownerObj);
+              return true; // quit
+            }
+          }
+          else ret.push(ownerObj);
         }
         else if (ownerObj.props['isNavigator.'])
           return false;  // quit, not scan sub level of NavXX
@@ -10688,6 +10693,18 @@ function trySyncUncheck_(self,ownerObj) {
 }
 
 function setOptChecked_(self,callback,newOpt,isForce) {
+  function delayCallback(bTime) {
+    var iWait = bTime.shift();
+    if (iWait) {
+      setTimeout( function() {
+        if (self.state['data-checked'])
+          callback();
+        else delayCall(bTime);
+      },iWait);
+    }
+    else callback();  // force callback
+  }
+  
   var popOption = self.state.popOption;
   if (popOption) {
     if (!popOption.state || !popOption.state.opened) {
@@ -10703,11 +10720,7 @@ function setOptChecked_(self,callback,newOpt,isForce) {
   
   if (!self.state['data-checked']) {
     self.duals['data-checked'] = '1';  // redirect to duals['data-checked'] = '1'
-    if (callback) {
-      setTimeout( function() {
-        callback();
-      },0);
-    }
+    if (callback) delayCallback([100,100,100]); // max wait 300 ms, if not ready force callback
     return;
   }
   
@@ -11331,7 +11344,7 @@ class TTempPanel_ extends TPanel_ {
     var style_ = this.props.style;
     if (this.props['hookTo.'] === topmostWidget_) {
       this.duals.style = style_ = Object.assign({},style_,{position:'absolute'});
-      if ((this.$gui.keyid+'').startsWith('$$')) this.isLibGui = true;
+      if ((this.$gui.keyid+'').indexOf('$$') == 0) this.isLibGui = true;
     }
     
     if (W.__design__ && !this.isLibGui) {
@@ -11402,7 +11415,7 @@ class TTempDiv_ extends TUnit_ {
     var style_ = this.props.style;
     if (this.props['hookTo.'] === topmostWidget_) {
       this.duals.style = style_ = Object.assign({},style_,{position:'absolute'});
-      if ((this.$gui.keyid+'').startsWith('$$')) this.isLibGui = true;
+      if ((this.$gui.keyid+'').indexOf('$$') == 0) this.isLibGui = true;
     }
     
     if (W.__design__ && !this.isLibGui) {

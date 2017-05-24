@@ -21,6 +21,7 @@ git clone https://github.com/rewgt/shadow-server.git
 
 ```
 cd shadow-server
+npm install
 npm start
 ```
 

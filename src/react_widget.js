@@ -2229,34 +2229,41 @@ utils.loadingEntry = function(require,module,exports) {
       });
     }
     
-    function transCssStyle(sStyle,node) {
-      sStyle = sStyle.replace(_jsStrPattern,'');  // remove string literally
-      var b = sStyle.split(';'), bProp = [];
-      b.forEach( function(item) {
-        var iPos = item.indexOf(':');
-        if (iPos > 0) {
-          item = item.slice(0,iPos).trim();
-          if (item) bProp.push(item);  // get every property item
-        }
+    function transCssStyle(sStyle) {
+      var bIns = [];
+      var sStyle2 = sStyle.replace(_jsStrPattern, function(s,iPos) {
+        bIns.push([iPos,s]);
+        return '';  // remove string literally
       });
       
+      var b = sStyle2.split(';'), sOrg = '';
       var dRet = {}, hasSome = false;
-      bProp.forEach( function(item) {
-        var item2 = camelizeStyleName(item);
-        var sValue = node.style[item2];
-        if (sValue) {
-          dRet[item2] = sValue;
-          hasSome = true;
+      b.forEach( function (item) {
+        var iLast = sOrg.length;
+        sOrg += item + ' ';    // ' ' standard for ';'
+        if (!item) return;
+        
+        while (bIns.length) {
+          var iTmp = bIns[0][0];
+          if (iTmp >= iLast && iTmp < sOrg.length) {
+            var bTmp = bIns.shift();
+            sOrg = sOrg.slice(0,iTmp) + bTmp[1] + sOrg.slice(iTmp);
+          }
+          else break;
         }
-        else if (item != item2) {
-          sValue = node.style[item];
-          if (sValue) {
-            dRet[item] = sValue;
+        var item2 = sOrg.slice(iLast);
+        
+        var iPos = item2.indexOf(':');
+        if (iPos > 0) {
+          var sName = item2.slice(0,iPos).trim();
+          if (sName) {
+            dRet[camelizeStyleName(sName)] = item2.slice(iPos+1).trim();
             hasSome = true;
           }
         }
       });
-      return (hasSome?dRet:null);
+      
+      return hasSome ? dRet : null;
     }
     
     function scanNodeAttr(node,sPrefix,idx) {
@@ -2279,7 +2286,7 @@ utils.loadingEntry = function(require,module,exports) {
           }
           else sTemplate = sValue;
         }
-        else if (sName == 'style')
+        else if (sName == 'sty__' || sName == 'style')
           sStyle = item.value;
         else bProp.push([sName,item.value]);
       }
@@ -2289,7 +2296,7 @@ utils.loadingEntry = function(require,module,exports) {
         if (sStyle) {
           var dStyle = (sStyle[0] == '{' && sStyle.slice(-1) == '}')? 
                 jsxJsonParse(sStyle.slice(1,-1),'style',sPrefix,0):
-                transCssStyle(sStyle,node);
+                transCssStyle(sStyle);
           if (dStyle) dProp.style = dStyle;
         }
         

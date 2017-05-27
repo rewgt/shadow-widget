@@ -1,8 +1,7 @@
-// shadow-widget cdn ver 0.1.3
+(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+// index_cdn.js
 // for cdn package of shadow-widget, exclude react & react-dom
 // package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ es2015 react ] ]
-
-(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 
 'use strict';
 
@@ -2157,34 +2156,41 @@ utils.loadingEntry = function (require, module, exports) {
       });
     }
 
-    function transCssStyle(sStyle, node) {
-      sStyle = sStyle.replace(_jsStrPattern, ''); // remove string literally
-      var b = sStyle.split(';'),
-          bProp = [];
-      b.forEach(function (item) {
-        var iPos = item.indexOf(':');
-        if (iPos > 0) {
-          item = item.slice(0, iPos).trim();
-          if (item) bProp.push(item); // get every property item
-        }
+    function transCssStyle(sStyle) {
+      var bIns = [];
+      var sStyle2 = sStyle.replace(_jsStrPattern, function (s, iPos) {
+        bIns.push([iPos, s]);
+        return ''; // remove string literally
       });
 
+      var b = sStyle2.split(';'),
+          sOrg = '';
       var dRet = {},
           hasSome = false;
-      bProp.forEach(function (item) {
-        var item2 = camelizeStyleName(item);
-        var sValue = node.style[item2];
-        if (sValue) {
-          dRet[item2] = sValue;
-          hasSome = true;
-        } else if (item != item2) {
-          sValue = node.style[item];
-          if (sValue) {
-            dRet[item] = sValue;
+      b.forEach(function (item) {
+        var iLast = sOrg.length;
+        sOrg += item + ' '; // ' ' standard for ';'
+        if (!item) return;
+
+        while (bIns.length) {
+          var iTmp = bIns[0][0];
+          if (iTmp >= iLast && iTmp < sOrg.length) {
+            var bTmp = bIns.shift();
+            sOrg = sOrg.slice(0, iTmp) + bTmp[1] + sOrg.slice(iTmp);
+          } else break;
+        }
+        var item2 = sOrg.slice(iLast);
+
+        var iPos = item2.indexOf(':');
+        if (iPos > 0) {
+          var sName = item2.slice(0, iPos).trim();
+          if (sName) {
+            dRet[camelizeStyleName(sName)] = item2.slice(iPos + 1).trim();
             hasSome = true;
           }
         }
       });
+
       return hasSome ? dRet : null;
     }
 
@@ -2210,13 +2216,13 @@ utils.loadingEntry = function (require, module, exports) {
             bProp.push([sName, sValue]); // is link path
             sTemplate = isSpan ? 'RefSpan' : 'RefDiv';
           } else sTemplate = sValue;
-        } else if (sName == 'style') sStyle = item.value;else bProp.push([sName, item.value]);
+        } else if (sName == 'sty__' || sName == 'style') sStyle = item.value;else bProp.push([sName, item.value]);
       }
 
       if (sTemplate) {
         var dProp = {};
         if (sStyle) {
-          var dStyle = sStyle[0] == '{' && sStyle.slice(-1) == '}' ? jsxJsonParse(sStyle.slice(1, -1), 'style', sPrefix, 0) : transCssStyle(sStyle, node);
+          var dStyle = sStyle[0] == '{' && sStyle.slice(-1) == '}' ? jsxJsonParse(sStyle.slice(1, -1), 'style', sPrefix, 0) : transCssStyle(sStyle);
           if (dStyle) dProp.style = dStyle;
         }
 
@@ -6949,6 +6955,7 @@ function streamReactTree_(bTree, iLevel, iOwnerFlag) {
 
     var value = dProp[sKey];
     if (value === undefined) return;
+    if (sKey == 'style') sKey = 'sty__';
 
     sRet += ' ' + sKey.replace(RE_UPCASE_ALL_, '-$1').toLowerCase() + '=';
     if (typeof value == 'string' && (sKey[0] == '$' || !value || value[0] != '{' || value.slice(-1) != '}')) sRet += "'" + adjustTagAttr(value) + "'";else sRet += "'{" + adjustTagAttr(JSON.stringify(value)) + "}'";

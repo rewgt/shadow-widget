@@ -24,7 +24,7 @@ var idSetter = W.$idSetter, creator = W.$creator;
 })(window.location);
 
 utils.version = function() {
-  return '0.1.3';
+  return '0.1.4';
 };
 
 var vendorId_ = (function(sUA) {

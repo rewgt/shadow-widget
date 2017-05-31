@@ -6,7 +6,7 @@ suports visual progaming also.
 
 ### Version state
 
-Current version: Beta 0.1.2   
+Current version: Beta 0.1.4   
 Document state: Only [chinese manual](https://rewgt.github.io/shadow-server/public/static/files/rewgt/doc/doc_zh/github_doc.html) is ready
 
 ### Install

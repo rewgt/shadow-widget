@@ -4,10 +4,7 @@
 Like 'react + reflux + react-router', but more simple and powerful,
 suports visual progaming also.
 
-### Version state
-
-Current version: Beta 0.1.4   
-Document state: Only [chinese manual](https://rewgt.github.io/shadow-server/public/static/files/rewgt/doc/doc_zh/github_doc.html) is ready
+Last stable version: v1.0
 
 ### Install
 
@@ -27,7 +24,9 @@ npm start
 
 ### User manual
 
-<a target="_blank" href="https://rewgt.github.io/shadow-server/public/static/files/rewgt/doc/doc_zh/github_doc.html">Shadow Widget User Manual</a>
+<a target="_blank" href="https://rewgt.github.io/shadow-server/public/static/files/rewgt/doc/doc_zh/github_doc.html">Shadow Widget User Manual (in Chinese)</a>
+
+Please refer to [shadow-server](https://github.com/rewgt/shadow-server) project, which provides development environment, and includes cdn-library of `shadow-widget`.
 
 ### BSD License
 

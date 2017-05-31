@@ -1,6 +1,6 @@
 {
   "name": "shadow-widget",
-  "version": "0.1.5",
+  "version": "1.0.0",
   "description": "Yet another 'react + reflux + react-router', more simple and powerful, suports visual progamming.",
   "main": "index.js",
   "scripts": {
@@ -25,10 +25,10 @@
   },
   "homepage": "https://github.com/rewgt/shadow-widget#readme",
   "devDependencies": {
-    "babel-preset-es2015": "^6.13.2",
-    "babel-preset-react": "^6.11.1",
-    "babelify": "^7.3.0",
-    "react": "^15.0.0",
-    "react-dom": "^15.0.0"
+    "babel-preset-es2015": "~6.13.2",
+    "babel-preset-react": "~6.11.1",
+    "babelify": "~7.3.0",
+    "react": "~15.5.0",
+    "react-dom": "~15.5.0"
   }
 }

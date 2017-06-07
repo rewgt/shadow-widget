@@ -24,7 +24,7 @@ var idSetter = W.$idSetter, creator = W.$creator;
 })(window.location);
 
 utils.version = function() {
-  return '0.1.4';
+  return '1.0.1';
 };
 
 var vendorId_ = (function(sUA) {
@@ -5928,12 +5928,12 @@ class TWidget_ {
   }
   
   _createClass(defs) {
-    if (!defs) { // try reuse cached react class
+    if (defs === null) {
       var temp = getTemplate_(this._className);
       if (!temp) console.log('fatal error: invalid WTC (' + this._className + ')');
       return temp;
     }
-    else return createClass_(this._extend(defs));
+    return createClass_(this._extend(defs || {}));
   }
   
   _getGroupOpt(self) {

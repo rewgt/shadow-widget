@@ -24,7 +24,7 @@ var idSetter = W.$idSetter, creator = W.$creator;
 })(window.location);
 
 utils.version = function() {
-  return '1.0.1';
+  return '1.0.2';
 };
 
 var vendorId_ = (function(sUA) {
@@ -3449,11 +3449,14 @@ function syncProps_(comp) {
       },0);
     }
     
-    if (firstRender && W.__debug__ && typeof comp.setup__ == 'function') {
-      try {
-        comp.setup__();
+    if (firstRender && W.__debug__) {
+      var fn = comp.props.setup__;
+      if (typeof fn == 'function') {
+        try {
+          fn.apply(comp);
+        }
+        catch(e) { console.log(e); }
       }
-      catch(e) { console.log(e); }
     }
     
     if (gui.id__ === comp.state.id__) {
@@ -6797,11 +6800,14 @@ class TWidget_ {
   }
   
   componentWillUnmount() {
-    if (W.__debug__ && typeof this.teardown__ == 'function') {
-      try {
-        this.teardown__();
+    if (W.__debug__) {
+      var fn = this.props.teardown__;
+      if (typeof fn == 'function') {
+        try {
+          fn.apply(this);
+        }
+        catch(e) { console.log(e); }
       }
-      catch(e) { console.log(e); }
     }
     
     var gui = this.$gui;
@@ -9136,6 +9142,7 @@ class TFieldset_ extends TP_ {
     var props = super.getDefaultProps();
     props.padding = TFieldset_padding_.slice(0);
     props.borderWidth = TFieldset_border_width_.slice(0);
+    props.style = {borderColor:'#bbb'};
     props['tagName.'] = 'fieldset';
     return props;
   }
@@ -9870,6 +9877,21 @@ T.Wbr  = new T.Wbr_();
 T.Button_ = simpleExtends(TSpan_,'Button');
 T.Button  = new T.Button_();
 
+function renderWithSync(self) {
+  syncProps_(self);
+  if (self.hideThis) return reactCreate_('span',displayNoneProp_);
+  
+  var props = setupRenderProp_(self);
+  if (self.$gui.syncValue) {
+    var node = findDomNode_(self);
+    if (node && node.value !== self.state.value)
+      node.value = self.state.value; // change directly, avoid re-render
+  }
+  
+  var b = self.$gui.comps, children = b.length?b:self.state['html.'];
+  return reactCreate_(self.props['tagName.'], props, children);
+}
+
 class TTextarea_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'Textarea',desc);
@@ -9895,8 +9917,11 @@ class TTextarea_ extends TSpan_ {
     
     if (this.props.defaultValue !== undefined)
       this.$gui.tagAttrs.push('defaultValue');
-    if (this.props.value === undefined)
+    // this.$gui.syncValue = false;  // default is false
+    if (this.props.value === undefined) {
       this.defineDual('value');
+      this.$gui.syncValue = true;
+    }
     
     return dState;
   }
@@ -9904,6 +9929,10 @@ class TTextarea_ extends TSpan_ {
   $$onChange(event) {
     this.duals.value = event.target.value;
     if (this.$onChange) this.$onChange(event);
+  }
+  
+  render() {
+    return renderWithSync(this);
   }
 }
 
@@ -10033,14 +10062,23 @@ class TInput_ extends TSpan_ {
   getInitialState() {
     var dState = super.getInitialState();
     if (this.props.defaultValue !== undefined)
-      this.$gui.tagAttrs.push('defaultValue');    // take as duals.defaultValue
+      this.$gui.tagAttrs.push('defaultValue');    // add render: defaultValue
     if (this.props.defaultChecked !== undefined)
-      this.$gui.tagAttrs.push('defaultChecked');  // take as duals.defaultChecked
+      this.$gui.tagAttrs.push('defaultChecked');  // add render: defaultChecked
     
-    if (this.props.value === undefined) {
-      var sType = this.props.type;
-      if (sType !== 'checkbox' && sType !== 'radio')
-        this.defineDual('value');  // force regist duals.value
+    var sType = this.props.type;
+    // this.$gui.syncValue = false; // default is false
+    if (sType === 'checkbox' || sType === 'radio') {
+      if (this.props.checked === undefined) {
+        this.defineDual('checked'); // force regist duals.checked
+        this.$gui.tagAttrs.push('checked');
+      }
+    }
+    else {
+      if (this.props.value === undefined) {
+        this.defineDual('value');   // force regist duals.value
+        this.$gui.syncValue = true;
+      }
     }
     
     return dState;
@@ -10052,6 +10090,10 @@ class TInput_ extends TSpan_ {
       this.duals.checked = event.target.checked;
     else this.duals.value = event.target.value;
     if (this.$onChange) this.$onChange(event);
+  }
+  
+  render() {
+    return renderWithSync(this);
   }
 }
 
@@ -10114,8 +10156,11 @@ class TSelect_ extends TSpan_ {
     
     if (this.props.defaultValue !== undefined)
       this.$gui.tagAttrs.push('defaultValue');
-    if (this.props.value === undefined)
+    // this.$gui.syncValue = false;  // default is false
+    if (this.props.value === undefined) {
       this.defineDual('value');
+      this.$gui.syncValue = true;
+    }
     
     return dState;
   }
@@ -10123,6 +10168,10 @@ class TSelect_ extends TSpan_ {
   $$onChange(event) {
     this.duals.value = event.target.value;
     if (this.$onChange) this.$onChange(event);
+  }
+  
+  render() {
+    return renderWithSync(this);
   }
 }
 
@@ -11093,10 +11142,17 @@ class TOptInput_ extends TOptSpan_ {
     
     if (this.props.defaultValue !== undefined)
       this.$gui.tagAttrs.push('defaultValue');  // data-checked should replace duals.defaultChecked
-    if (this.props.value === undefined) {
-      var sType = this.props.type;
-      if (sType !== 'checkbox' && sType !== 'radio')
+    var sType = this.props.type;
+    // this.$gui.syncValue = false; // default is false
+    if (sType === 'checkbox' || sType === 'radio') {
+      if (this.props.checked === undefined)
+        this.$gui.tagAttrs.push('checked');     // not use duals.checked
+    }
+    else {
+      if (this.props.value === undefined) {
         this.defineDual('value');  // force regist duals.value
+        this.$gui.syncValue = true;
+      }
     }
     
     this.defineDual('data-checked', function(value,oldValue) {
@@ -11139,6 +11195,10 @@ class TOptInput_ extends TOptSpan_ {
       this.setChecked(null);
     
     if (this.$onClick) this.$onClick(event);
+  }
+  
+  render() {
+    return renderWithSync(this);
   }
 }
 

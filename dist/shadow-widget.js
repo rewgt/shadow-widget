@@ -2484,7 +2484,7 @@ var idSetter = W.$idSetter,
 })(window.location);
 
 utils.version = function () {
-  return '1.0.1';
+  return '1.0.2';
 };
 
 var vendorId_ = function (sUA) {
@@ -5848,11 +5848,14 @@ function syncProps_(comp) {
       }, 0);
     }
 
-    if (firstRender && W.__debug__ && typeof comp.setup__ == 'function') {
-      try {
-        comp.setup__();
-      } catch (e) {
-        console.log(e);
+    if (firstRender && W.__debug__) {
+      var fn = comp.props.setup__;
+      if (typeof fn == 'function') {
+        try {
+          fn.apply(comp);
+        } catch (e) {
+          console.log(e);
+        }
       }
     }
 
@@ -9133,11 +9136,14 @@ var TWidget_ = function () {
   }, {
     key: 'componentWillUnmount',
     value: function componentWillUnmount() {
-      if (W.__debug__ && typeof this.teardown__ == 'function') {
-        try {
-          this.teardown__();
-        } catch (e) {
-          console.log(e);
+      if (W.__debug__) {
+        var fn = this.props.teardown__;
+        if (typeof fn == 'function') {
+          try {
+            fn.apply(this);
+          } catch (e) {
+            console.log(e);
+          }
         }
       }
 
@@ -11655,6 +11661,7 @@ var TFieldset_ = function (_TP_2) {
       var props = _get(TFieldset_.prototype.__proto__ || Object.getPrototypeOf(TFieldset_.prototype), 'getDefaultProps', this).call(this);
       props.padding = TFieldset_padding_.slice(0);
       props.borderWidth = TFieldset_border_width_.slice(0);
+      props.style = { borderColor: '#bbb' };
       props['tagName.'] = 'fieldset';
       return props;
     }
@@ -12538,6 +12545,21 @@ T.Wbr = new T.Wbr_();
 T.Button_ = simpleExtends(TSpan_, 'Button');
 T.Button = new T.Button_();
 
+function renderWithSync(self) {
+  syncProps_(self);
+  if (self.hideThis) return reactCreate_('span', displayNoneProp_);
+
+  var props = setupRenderProp_(self);
+  if (self.$gui.syncValue) {
+    var node = findDomNode_(self);
+    if (node && node.value !== self.state.value) node.value = self.state.value; // change directly, avoid re-render
+  }
+
+  var b = self.$gui.comps,
+      children = b.length ? b : self.state['html.'];
+  return reactCreate_(self.props['tagName.'], props, children);
+}
+
 var TTextarea_ = function (_TSpan_5) {
   _inherits(TTextarea_, _TSpan_5);
 
@@ -12570,7 +12592,11 @@ var TTextarea_ = function (_TSpan_5) {
       var dState = _get(TTextarea_.prototype.__proto__ || Object.getPrototypeOf(TTextarea_.prototype), 'getInitialState', this).call(this);
 
       if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue');
-      if (this.props.value === undefined) this.defineDual('value');
+      // this.$gui.syncValue = false;  // default is false
+      if (this.props.value === undefined) {
+        this.defineDual('value');
+        this.$gui.syncValue = true;
+      }
 
       return dState;
     }
@@ -12579,6 +12605,11 @@ var TTextarea_ = function (_TSpan_5) {
     value: function $$onChange(event) {
       this.duals.value = event.target.value;
       if (this.$onChange) this.$onChange(event);
+    }
+  }, {
+    key: 'render',
+    value: function render() {
+      return renderWithSync(this);
     }
   }]);
 
@@ -12748,12 +12779,21 @@ var TInput_ = function (_TSpan_9) {
     key: 'getInitialState',
     value: function getInitialState() {
       var dState = _get(TInput_.prototype.__proto__ || Object.getPrototypeOf(TInput_.prototype), 'getInitialState', this).call(this);
-      if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue'); // take as duals.defaultValue
-      if (this.props.defaultChecked !== undefined) this.$gui.tagAttrs.push('defaultChecked'); // take as duals.defaultChecked
+      if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue'); // add render: defaultValue
+      if (this.props.defaultChecked !== undefined) this.$gui.tagAttrs.push('defaultChecked'); // add render: defaultChecked
 
-      if (this.props.value === undefined) {
-        var sType = this.props.type;
-        if (sType !== 'checkbox' && sType !== 'radio') this.defineDual('value'); // force regist duals.value
+      var sType = this.props.type;
+      // this.$gui.syncValue = false; // default is false
+      if (sType === 'checkbox' || sType === 'radio') {
+        if (this.props.checked === undefined) {
+          this.defineDual('checked'); // force regist duals.checked
+          this.$gui.tagAttrs.push('checked');
+        }
+      } else {
+        if (this.props.value === undefined) {
+          this.defineDual('value'); // force regist duals.value
+          this.$gui.syncValue = true;
+        }
       }
 
       return dState;
@@ -12764,6 +12804,11 @@ var TInput_ = function (_TSpan_9) {
       var sType = this.props.type;
       if (sType === 'checkbox' || sType === 'radio') this.duals.checked = event.target.checked;else this.duals.value = event.target.value;
       if (this.$onChange) this.$onChange(event);
+    }
+  }, {
+    key: 'render',
+    value: function render() {
+      return renderWithSync(this);
     }
   }]);
 
@@ -12846,7 +12891,11 @@ var TSelect_ = function (_TSpan_11) {
       var dState = _get(TSelect_.prototype.__proto__ || Object.getPrototypeOf(TSelect_.prototype), 'getInitialState', this).call(this);
 
       if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue');
-      if (this.props.value === undefined) this.defineDual('value');
+      // this.$gui.syncValue = false;  // default is false
+      if (this.props.value === undefined) {
+        this.defineDual('value');
+        this.$gui.syncValue = true;
+      }
 
       return dState;
     }
@@ -12855,6 +12904,11 @@ var TSelect_ = function (_TSpan_11) {
     value: function $$onChange(event) {
       this.duals.value = event.target.value;
       if (this.$onChange) this.$onChange(event);
+    }
+  }, {
+    key: 'render',
+    value: function render() {
+      return renderWithSync(this);
     }
   }]);
 
@@ -14003,9 +14057,15 @@ var TOptInput_ = function (_TOptSpan_5) {
       var dState = _get(TOptInput_.prototype.__proto__ || Object.getPrototypeOf(TOptInput_.prototype), 'getInitialState', this).call(this);
 
       if (this.props.defaultValue !== undefined) this.$gui.tagAttrs.push('defaultValue'); // data-checked should replace duals.defaultChecked
-      if (this.props.value === undefined) {
-        var sType = this.props.type;
-        if (sType !== 'checkbox' && sType !== 'radio') this.defineDual('value'); // force regist duals.value
+      var sType = this.props.type;
+      // this.$gui.syncValue = false; // default is false
+      if (sType === 'checkbox' || sType === 'radio') {
+        if (this.props.checked === undefined) this.$gui.tagAttrs.push('checked'); // not use duals.checked
+      } else {
+        if (this.props.value === undefined) {
+          this.defineDual('value'); // force regist duals.value
+          this.$gui.syncValue = true;
+        }
       }
 
       this.defineDual('data-checked', function (value, oldValue) {
@@ -14045,6 +14105,11 @@ var TOptInput_ = function (_TOptSpan_5) {
       if (sType !== 'checkbox' && sType !== 'radio') this.setChecked(null);
 
       if (this.$onClick) this.$onClick(event);
+    }
+  }, {
+    key: 'render',
+    value: function render() {
+      return renderWithSync(this);
     }
   }]);
 

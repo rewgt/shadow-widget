@@ -10156,11 +10156,8 @@ class TSelect_ extends TSpan_ {
     
     if (this.props.defaultValue !== undefined)
       this.$gui.tagAttrs.push('defaultValue');
-    // this.$gui.syncValue = false;  // default is false
-    if (this.props.value === undefined) {
-      this.defineDual('value');
-      this.$gui.syncValue = true;
-    }
+    if (this.props.value === undefined)
+      this.defineDual('value');  // force regist duals.value
     
     return dState;
   }
@@ -10168,10 +10165,6 @@ class TSelect_ extends TSpan_ {
   $$onChange(event) {
     this.duals.value = event.target.value;
     if (this.$onChange) this.$onChange(event);
-  }
-  
-  render() {
-    return renderWithSync(this);
   }
 }
 

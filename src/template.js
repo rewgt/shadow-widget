@@ -24,7 +24,7 @@ var idSetter = W.$idSetter, creator = W.$creator;
 })(window.location);
 
 utils.version = function() {
-  return '1.0.2';
+  return '1.0.3';
 };
 
 var vendorId_ = (function(sUA) {
@@ -454,7 +454,14 @@ function getWdgtType_(targ) {  // targ can be: widget or component
 utils.getWdgtType = getWdgtType_;
 
 utils.eachElement = function(comp,callback) {
-  if (!callback) return;
+  if (!callback) {
+    var b = [];
+    comp.$gui.comps.forEach( function(item) {
+      if (item) b.push(item);
+    });
+    return b;
+  }
+  
   comp.$gui.comps.forEach( function(item,idx) {
     if (item) callback(item,idx);
   });
@@ -465,7 +472,14 @@ utils.setElement = function(comp,idx,ele) {
 };
 
 utils.eachComponent = function(comp,callback) {
-  if (!callback) return;  
+  if (!callback) {
+    var b = [];
+    utils.eachComponent(comp, function(childObj) {
+      b.push(childObj);
+    });
+    return b;
+  }
+  
   var wdgt = comp.widget;
   if (!wdgt) return;
   
@@ -494,6 +508,44 @@ function setupRenderProp_(comp,dStyle) {
   return props;
 }
 utils.setupRenderProp = setupRenderProp_;
+
+utils.bindMountData = function(data) {
+  if (!data) data = W.$dataSrc;
+  if (!data || typeof data != 'object') {
+    console.log('error: invalid W.$dataSrc');
+    return;
+  }
+  
+  Object.keys(idSetter).forEach( function(sKey) {
+    var fn = idSetter[sKey];
+    if (typeof fn != 'function') return;
+    
+    var item = data[sKey];
+    if (item && typeof item == 'object') {
+      var item2 = Object.assign({},item), attrs = item2.__attr__;
+      delete item2.__attr__;
+      if (!Array.isArray(attrs))
+        attrs = Object.keys(item2);
+      
+      var wrapFn = wrapFunc(sKey,attrs,item2,fn);
+      Object.defineProperty(idSetter,sKey,{ enumerable:true, configurable:true,
+        get: function() { return wrapFn }, // no 'set'
+      });
+    }
+  });
+  
+  function wrapFunc(sKey,attrs,srcData,originFn) {
+    return ( function(value,oldValue) {
+      var self = this;
+      if (originFn.call(self,value,oldValue)) return;  // if origin idSetter return `true` means no chain data
+      if (value == 2) {  // when mount
+        for (var i=0,attr; attr = attrs[i]; i++) {
+          self.duals[attr] = srcData[attr];
+        }
+      }
+    });
+  }
+};
 
 function fireTrigger_(oldData,comp) {
   // step 1: get trigger data
@@ -623,6 +675,10 @@ utils.fireTrigger = function(comp) {
   else fireTrigger_(undefined,comp);
 };
 
+function chooseIdentical_(iOld) {
+  return iOld === identicalId_? identicalId(): identicalId_;
+}
+
 utils.setChildren = function(comp,children,callback) {
   if (!Array.isArray(children)) return; // fatal error
   
@@ -640,26 +696,27 @@ utils.setChildren = function(comp,children,callback) {
   
   var gui = comp.$gui, existNum = 0, rmvEx = 0;
   bChild.forEach( function(item,idx) {
-    if (!item) return;
+    // if (!item) return;
     
-    var keyid, sKey = getElementKey_(item);
-    if (sKey) {
-      if (typeof gui.compIdx[sKey] == 'number') { // already exist, ignore clone
-        existNum += 1;
-        return;
-      }
-      
-      var iTmp = parseInt(sKey);
-      if ((iTmp+'') == sKey)
-        keyid = iTmp
-      else keyid = sKey;
-    }
-    else {
+    var sKey = getElementKey_(item);
+    if (!sKey) {
       rmvEx += 1;
       return; // ignore clone, change removeNum wait to rescan that will clone 'keyid.'
     }
     
-    bChild[idx] = reactClone_(item,{'keyid.':keyid,key:sKey});
+    if (typeof gui.compIdx[sKey] == 'number') { // already exist, ignore clone
+      existNum += 1;
+      return;
+    }
+    
+    if (item.props['tagName.']) {  // is shadow widget node
+      var iTmp = parseInt(sKey);
+      var dProp = { key: sKey,     // no need set 'hookTo.'
+        'keyid.': (iTmp+'')===sKey?iTmp:sKey,
+      };
+      bChild[idx] = reactClone_(item,dProp);
+    }
+    // else, no need clone original react node
   });
   
   // gui.removeNum only can increase, can not decrease
@@ -668,13 +725,11 @@ utils.setChildren = function(comp,children,callback) {
   
   if (!gui.inSync) {
     if (gui.compState >= 2) {
-      var newId = comp.state.id__ === identicalId_? identicalId(): identicalId_;
-      comp.setState({id__:newId},callback);   // trigger re-render
+      comp.setState({id__:chooseIdentical_(comp.state.id__)},callback);   // trigger re-render
     }
-    else { // maybe duals.id__ == 1
+    else {  // maybe id__ is 1, should process at next tick
       setTimeout( function() {
-        var newId = comp.state.id__ === identicalId_? identicalId(): identicalId_;
-        comp.setState({id__:newId},callback); // trigger re-render
+        comp.setState({id__:chooseIdentical_(comp.state.id__)},callback); // trigger re-render
       },0);
     }
   }
@@ -2977,8 +3032,10 @@ function dualFuncOfGetSet_(comp,attr,superSet,setFn,baseDual) {
       var triggerLsn = false;
       if (isId__ && value <= 2) {  // must not use baseDual (base.setter)
         if (isTop)
-          this.state.id__ = gui.id__ = value; // if value > 2, setter will assign gui.id__
-        if (setFn) setFn(value,oldValue);     // not call superSet
+          this.state.id__ = gui.id__ = value;   // if value > 2, setter will assign gui.id__
+        if (superSet) superSet(value,oldValue); // id__ not support 'baseDual'
+        if (setFn) setFn(value,oldValue);
+        if (value == 2) gui.id2__ = 0; // next auto insert duals.id__ = identicalId() 
         triggerLsn = !superSet && value != 0;
       }
       else {
@@ -3133,12 +3190,13 @@ function syncProps_(comp) {
       // define dual-attr
       var exprDualSetter = {};
       var dualAttrList = Object.keys(gui.dualAttrs);
+      duals0.children = comp.props.children;
       if (bExpr0.length || dualAttrList.length || gui.tagAttrs.length || gui.dataset.length) {
         var iRmvData_ = -1;
         var b = [bExpr0,dualAttrList,gui.tagAttrs,gui.dataset];
         for (var i=0,bAttr; bAttr=b[i]; i++) {
           bAttr.forEach( function(sKey) {
-            if (i == 0) { 
+            if (i == 0) {
               // comp.state[sKey] = undefined;  // '$expr' default is undefined
               // if (dHasDual[sKey]) return;    // only $expr can override-define
               dHasDual[sKey] = true;
@@ -3460,7 +3518,7 @@ function syncProps_(comp) {
     }
     
     if (gui.id__ === comp.state.id__) {
-      if (gui.id2__ == 0) // not fired by duals.id__ = xx
+      if (gui.id2__ == 0)  // not fired by duals.id__ = xx // when mount auto insert: duals.id__ = identicalId
         duals.id__ = identicalId_ !== comp.state.id__? identicalId_: identicalId();
       // else, in duals.id__ assigning // ignore
     }
@@ -3469,7 +3527,7 @@ function syncProps_(comp) {
       comp.state.id__ = iTmp - 1; // iTmp-1 >= 3 because identicalId() >= 4, force make different
       duals.id__ = iTmp;          // setter of duals.id__ must run since state.id__ changed
     }
-    gui.id2__ = 0; // id2__ != 0 means in id__ changing
+    gui.id2__ = 0; // gui.id2__ == 0 means finish one loop, gui.id2__ != 0 means by 'duals.id__ = xx', else, changing by setState({id__})
     
     if (gui.isChildExpr && gui.children2 !== comp.props.children) {
       gui.removeNum += gui.comps.length;    // wait to rescan in duals.childNumId
@@ -5824,7 +5882,7 @@ class TWidget_ {
     this._classDesc = desc || '';
     
     this._statedProp = ['width','height','left','top'];
-    this._silentProp = ['className','hookTo.','keyid.','childInline.'];
+    this._silentProp = ['className','hookTo.','keyid.','childInline.','tagName.'];
     this._defaultProp = {width:0.9999, height:0.9999, left:0, top:0};
     this._htmlText = false; // not use 'html.'
     this._docUrl = 'doc';   // locate to: doc/{this._className}.html
@@ -5982,7 +6040,8 @@ class TWidget_ {
       // borderWidth: [0,0,0,0],     // top,right,bottom,left
       // padding: [0,0,0,0],
       // margin: [0,0,0,0],
-      'childInline.': false
+      'childInline.': false,
+      'tagName.': 'div',
     };
   }
   
@@ -6206,7 +6265,9 @@ class TWidget_ {
     if (isTopmost) // topmost can not be panel, NOT render children as flex
       gui.className = removeClass_(gui.className, ['rewgt-panel', 'row-reverse', 'reverse-row', 'col-reverse', 'reverse-col']);
     Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
-    var dState = { id__:0, childNumId:0, duals:[], exprAttrs:exprAttrs.slice(0) }; // state.duals = [[attr,newValue], ...]
+    var dState = { id__:0, childNumId:0, duals:[], 'tagName.':this.props['tagName.'],
+      exprAttrs:exprAttrs.slice(0),
+    }; // state.duals = [[attr,newValue], ...]
     if (W.__design__) {
       var d = template._getGroupOpt(this); // has hooked, this.widget should be OK
       dState['data-group.opt'] = d.type + '/' + d.editable; // no props['data-group.opt'], also not in $gui.dataset
@@ -6516,17 +6577,18 @@ class TWidget_ {
       
       var bColumn = thisObj.state.sizes, useSizes = Array.isArray(bColumn);
       var compIdx = gui.compIdx, bComp = gui.comps, isScenePage = thisObj.props['isScenePage.'];
-      var hasAuto = false, hasNeValue = false, sparedTotal = 0;
+      var hasAuto = false, hasNeValue = false, sparedTotal = 0, needClear = false;
       
       bComp.forEach( function(child,iPos) {
         if (typeof child == 'string') {
           if (iPos == 0 && bComp.length == 1 && thisObj.duals.hasOwnProperty('html.')) {
             thisObj.state['html.'] = child;
-            bComp[iPos] = undefined;
+            needClear = true;
             return;
           }
           if (!childInline) {
             bComp[iPos] = undefined;
+            console.log('warning: can not add text element to panel (' + hookThis.getPath() + ')');
             return;
           }
           child = bComp[iPos] = reactCreate_(Span__,{'html.':child}); // auto change to React Element
@@ -6585,8 +6647,8 @@ class TWidget_ {
           }
           else { // if not childInline, only support rewget-static/rewgt-panel/rewgt-unit
             if (!hasClass_(child.props.className, ['rewgt-panel', 'rewgt-unit'])) {
-              console.log('error: only panel, div, paragraph (' + keyid + ') can add to panel or div (' + hookThis.getPath() + ').');
               bComp[iPos] = undefined;  // must not isOld
+              console.log('error: only panel, div, paragraph (' + keyid + ') can add to panel or div (' + hookThis.getPath() + ').');
               return;
             }
           }
@@ -6690,6 +6752,8 @@ class TWidget_ {
         }
       });  // end of bComp.forEach()
       
+      if (needClear) bComp.splice(0);
+      
       if (!useSizes) {
         if (hasNeValue && !hasAuto) {
           if (sparedTotal > 0 || gui.useSparedX != checkRow || gui.useSparedY != checkCol)
@@ -6743,7 +6807,31 @@ class TWidget_ {
   }
   
   shouldComponentUpdate(nextProps,nextState) {
-    return utils.shouldUpdate(this,nextProps,nextState);
+    var ret = utils.shouldUpdate(this,nextProps,nextState);
+    
+    if (ret && this.props.children !== nextProps.children && !this.props['marked.']) {
+      var gui = this.$gui, duals = this.duals, duals0 = gui.duals;
+      var child2 = duals0.children = nextProps.children;
+      var b = gui.comps = children2Arr_(child2), wdgt = this.widget;
+      
+      // children be changed by utils.setChildren(), adding 'hookTo.' since no trigger duals.childNumId
+      b.forEach(function (ele, idx) {
+        if (!ele) return;
+        if (ele.props['tagName.']) {
+          var sKey = getElementKey_(ele);
+          if (!sKey) return;
+          
+          var iTmp = parseInt(sKey);
+          var dProp = { key: sKey,
+            'keyid.': iTmp + '' === sKey ? iTmp : sKey,
+            'hookTo.': wdgt
+          };
+          b[idx] = reactClone_(ele,dProp);
+        }
+      });
+    }
+    
+    return ret;
   }
   
   componentWillReceiveProps(nextProps) {
@@ -6856,13 +6944,13 @@ class TWidget_ {
       if (this.$gui.inSync) {
         var self = this;
         setTimeout( function() {
-          var newId = self.state.id__ === identicalId_? identicalId(): identicalId_;
+          var newId = chooseIdentical_(self.state.id__);
           var data2 = Object.assign({},data,{id__:newId});
           self.setState(data2,callback);
         },0);
       }
       else {
-        var newId = this.state.id__ === identicalId_? identicalId(): identicalId_;
+        var newId = chooseIdentical_(this.state.id__);
         var data2 = Object.assign({},data,{id__:newId});
         this.setState(data2,callback);
       }
@@ -7649,8 +7737,9 @@ class TWidget_ {
         var currKeyid, item = bComp[i];
         if (Array.isArray(item)) {   // pseudo, newly added
           currKeyid = item[0]; item = item[1];
-          var props = { key: currKeyid + '', 'keyid.': currKeyid };
+          var props = { key: currKeyid + '' };
           if (item.props['childInline.'] !== undefined) {
+            props['keyid.'] = currKeyid;
             props['hookTo.'] = thisWidget; // not react element
             
             if (isTopmost && item.props['isScenePage.'] && item.props.noShow && !W.__design__)
@@ -7701,7 +7790,7 @@ class TWidget_ {
         // else, nothing to process
       }
       else {
-        var newId = this.state.id__ === identicalId_? identicalId(): identicalId_;
+        var newId = chooseIdentical_(this.state.id__);
         this.setState({id__:newId},doCallback);
       }
     }
@@ -7934,7 +8023,7 @@ class TWidget_ {
     
     var bChild = this.prepareState();
     var props = setupRenderProp_(this);
-    return reactCreate_('div', props, bChild);
+    return reactCreate_(this.state['tagName.'], props, bChild);
   }
 }
 
@@ -8961,7 +9050,6 @@ T.TablePanel  = new TTablePanel_();
 class TDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'Div',desc);
-    this._silentProp.push('tagName.');  // _statedProp no change
     this._defaultProp.height = undefined;
     this._defaultProp.minHeight = 20;
     this._htmlText = true;
@@ -8974,7 +9062,6 @@ class TDiv_ extends TUnit_ {
     props.height = null;
     props.minHeight = 20;
     // props['childInline.'] = false;  // default is false
-    props['tagName.'] = 'div';
     return props;
   }
   
@@ -8995,7 +9082,7 @@ class TDiv_ extends TUnit_ {
     
     var bChild = this.prepareState();
     var props = setupRenderProp_(this);
-    return reactCreate_(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
+    return reactCreate_(this.state['tagName.'], props, bChild.length?bChild:this.state['html.']);
   }
 }
 
@@ -9062,7 +9149,6 @@ var TPara_margin_ = [6, 0, 6, 0];
 class TP_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'P',desc);
-    this._silentProp.push('tagName.');  // _statedProp no change
     this._defaultProp.width = undefined;
     this._defaultProp.height = undefined;
     this._defaultProp.margin = TPara_margin_.slice(0);
@@ -9071,13 +9157,11 @@ class TP_ extends TUnit_ {
   
   getDefaultProps() {
     var props = super.getDefaultProps();
-    // props.className = 'rewgt-unit';  // default is 'rewgt-unit'
-    props.width = null;
-    props.height = null;
-    props.margin = TPara_margin_.slice(0);
-    props['childInline.'] = true;
-    props['tagName.'] = 'p';
-    return props;
+    return Object.assign(props, {  // default props.className is 'rewgt-unit'
+      width:null, height:null,
+      margin: TPara_margin_.slice(0),
+      'childInline.':true, 'tagName.':'p',
+    });
   }
   
   getInitialState() {
@@ -9097,7 +9181,7 @@ class TP_ extends TUnit_ {
     
     var bChild = this.prepareState();
     var props = setupRenderProp_(this);
-    return reactCreate_(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
+    return reactCreate_(this.state['tagName.'], props, bChild.length?bChild:this.state['html.']);
   }
 }
 
@@ -9121,7 +9205,7 @@ class TNoscript_ extends TP_ {
   
   render() {
     syncProps_(this);  // should call syncProps since duals.attr in using
-    return reactCreate_(this.props['tagName.']); // ignore props and children
+    return reactCreate_(this.state['tagName.']); // ignore props and children
   }
 }
 
@@ -9130,19 +9214,21 @@ T.Noscript  = new TNoscript_();
 
 var TFieldset_padding_ = [10,10,10,10];
 var TFieldset_border_width_ = [2,2,2,2];
+var TFieldSet_style_ = { borderColor: '#bbb' };
 
 class TFieldset_ extends TP_ {
   constructor(name,desc) {
     super(name || 'Fieldset',desc);
     this._defaultProp.padding = TFieldset_padding_.slice(0);
     this._defaultProp.borderWidth = TFieldset_border_width_.slice(0);
+    this._defaultProp.style = Object.assign({},TFieldSet_style_);
   }
   
   getDefaultProps() {
     var props = super.getDefaultProps();
     props.padding = TFieldset_padding_.slice(0);
     props.borderWidth = TFieldset_border_width_.slice(0);
-    props.style = {borderColor:'#bbb'};
+    props.style = Object.assign({},TFieldSet_style_);
     props['tagName.'] = 'fieldset';
     return props;
   }
@@ -9301,7 +9387,7 @@ class TTbody_ extends TP_ {
       bChild.push(tailRow);
       
       var props = setupRenderProp_(this);
-      return reactCreate_(this.props['tagName.'],props,bChild);
+      return reactCreate_(this.state['tagName.'],props,bChild);
     }
     else return super.render();
   }
@@ -9553,7 +9639,9 @@ class TSpan_ extends TWidget_ {
     Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
     if (W.__design__) gui.className = addClass_(gui.className,'rewgt-inline'); // gui.className is fixed, not changed by prop.className
     var dStyle = Object.assign({},this.props.style);
-    var dState = { id__:0, childNumId:0, duals:[], exprAttrs:exprAttrs.slice(0),
+    var dState = { id__:0, childNumId:0, duals:[],
+      'tagName.': this.props['tagName.'],
+      exprAttrs: exprAttrs.slice(0),
       klass:'', style:{}, 'html.':null,
     }; // state.duals = [[attr,newValue], ...]
     if (W.__design__) {
@@ -9628,12 +9716,12 @@ class TSpan_ extends TWidget_ {
       if (oldNumId == 0 && hookThis.parent === topmostWidget_)
         console.log('warning: can not hook inline widget to topmost directly.');
       
-      var compIdx = gui.compIdx, bComp = gui.comps;
+      var compIdx = gui.compIdx, bComp = gui.comps, needClear = false;
       bComp.forEach( function(child,iPos) {
         if (typeof child == 'string') {
           if (iPos == 0 && bComp.length == 1 && thisObj.duals.hasOwnProperty('html.')) {
             thisObj.state['html.'] = child;
-            bComp[iPos] = undefined;
+            needClear = true;
             return;
           }
           child = bComp[iPos] = reactCreate_(Span__,{'html.':child}); // auto change to React Element
@@ -9677,6 +9765,7 @@ class TSpan_ extends TWidget_ {
         if (childInline2 !== undefined) {
           if (!childInline2) {
             bComp[iPos] = undefined;  // must not isOld
+            console.log('warning: widget (' + hookThis.getPath() + '.' + sKey + ') can not be panel');
             return;   // not inline, ignore adding  // no need print warning
           }
         }
@@ -9702,6 +9791,7 @@ class TSpan_ extends TWidget_ {
         if (!isOld)
           bComp[iPos] = reactClone_(child,{'hookTo.':hookThis, key:sKey, 'keyid.':keyid});
       });
+      if (needClear) bComp.splice(0);
     });
     
     return dState;
@@ -9731,7 +9821,7 @@ class TSpan_ extends TWidget_ {
     
     var props = setupRenderProp_(this);
     var b = this.$gui.comps, children = b.length?b:this.state['html.'];
-    return reactCreate_(this.props['tagName.'], props, children);
+    return reactCreate_(this.state['tagName.'], props, children);
   }
 }
 
@@ -9889,7 +9979,7 @@ function renderWithSync(self) {
   }
   
   var b = self.$gui.comps, children = b.length?b:self.state['html.'];
-  return reactCreate_(self.props['tagName.'], props, children);
+  return reactCreate_(self.state['tagName.'], props, children);
 }
 
 class TTextarea_ extends TSpan_ {
@@ -10553,8 +10643,7 @@ T.NavPanel  = new TNavPanel_();
 class TNavDiv_ extends TNavPanel_ {
   constructor(name,desc) {
     super(name || 'NavDiv',desc);
-    // this._silentProp.push('isNavigator.');
-    this._silentProp.push('tagName.');
+    // this._silentProp.push('isNavigator.'); // has defined in base class
     this._defaultProp.height = undefined;
     this._defaultProp.minHeight = 20;
   }
@@ -10563,7 +10652,7 @@ class TNavDiv_ extends TNavPanel_ {
     var dProp = super.getDefaultProps();
     dProp.className = 'rewgt-unit';  // overwrite TNavPanel_'s default
     dProp['isNavigator.'] = 2;
-    dProp['tagName.'] = 'div';
+    // dProp['tagName.'] = 'div';    // default is 'div'
     dProp.height = null;
     dProp.minHeight = 20;
     return dProp;
@@ -10631,7 +10720,7 @@ T.GroundPanel  = new TGroundPanel_();
 class TGroundDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'GroundDiv',desc);
-    this._silentProp.push('tagName.','isPlayground.');
+    this._silentProp.push('isPlayground.');
     this._defaultProp.height = undefined;
     this._defaultProp.minHeight = 20;
     this._htmlText = true;
@@ -10644,7 +10733,7 @@ class TGroundDiv_ extends TUnit_ {
     props.width = 0.9999;
     props.height = null;
     props.minHeight = 20;
-    props['tagName.'] = 'div';
+    // props['tagName.'] = 'div';      // default is 'div'
     props['isPlayground.'] = 2;
     return props;
   }
@@ -10669,7 +10758,7 @@ class TGroundDiv_ extends TUnit_ {
       
       var bChild = this.prepareState();
       var props = setupRenderProp_(this);
-      return reactCreate_(this.props['tagName.'], props, bChild.length?bChild:this.state['html.']);
+      return reactCreate_(this.state['tagName.'], props, bChild.length?bChild:this.state['html.']);
     }
   }
 }
@@ -11011,7 +11100,7 @@ class TOptDiv_ extends TDiv_ {
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
-    dProp['tagName.'] = 'div';
+    // dProp['tagName.'] = 'div';  // default is 'div'
     dProp['data-checked'] = '';
     dProp['isOption.'] = true;
     return dProp;
@@ -11442,14 +11531,14 @@ T.TempPanel  = new TTempPanel_();
 class TTempDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'TempDiv',desc);
-    this._silentProp.push('isTemplate.','tagName.','data-temp.type');
+    this._silentProp.push('isTemplate.','data-temp.type');
     this._htmlText = true;
   }
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
     dProp['isTemplate.'] = 2;
-    dProp['tagName.'] = 'div';
+    // dProp['tagName.'] = 'div';  // default is 'div'
     if (W.__design__) {
       // dProp.width = 0.9999; dProp.height = 0.9999;
       dProp['data-temp.type'] = 2;
@@ -12301,6 +12390,11 @@ class TMarkedDiv_ extends TDiv_ {
           renewMarkdown_(compObj,sText, function(succ,regNode) {    // compObj must isHooked
             if (!succ) return;
             
+            if (self.props.noShow) {
+              self.$gui.compIdx = {};
+              self.$gui.comps = [];
+            }
+            
             // not use compObj.duals['html.'] = sText  // no trigger listen in __design__
             compObj.setState({'html.':sText,id__:identicalId()}, function() {
               renewStaticChild(compObj,true);
@@ -12373,6 +12467,12 @@ class TMarkedDiv_ extends TDiv_ {
         if (self.isHooked) {
           renewMarkdown_(self,value, function(succ,regNode) {
             if (!succ) return;
+            
+            if (self.props.noShow) {
+              self.$gui.compIdx = {};
+              self.$gui.comps = [];
+            }
+            
             self.reRender( function () {
               renewStaticChild(self,true);
               
@@ -12431,13 +12531,11 @@ class TMarkedDiv_ extends TDiv_ {
   
   render() {
     syncProps_(this);
-    if (this.hideThis) return null;   // as <noscript>
+    if (this.hideThis) return null;  // as <noscript>
     
     var bChild = this.prepareState();
-    if (this.props.noShow) bChild = null;
-    
     var props = setupRenderProp_(this);
-    return reactCreate_(this.props['tagName.'],props,bChild); // not use 'html.'
+    return reactCreate_(this.state['tagName.'],props,bChild); // not use 'html.'
   }
 }
 

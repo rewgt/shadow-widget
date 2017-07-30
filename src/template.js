@@ -24,7 +24,7 @@ var idSetter = W.$idSetter, creator = W.$creator;
 })(window.location);
 
 utils.version = function() {
-  return '1.0.3';
+  return '1.0.4';
 };
 
 var vendorId_ = (function(sUA) {
@@ -172,7 +172,10 @@ var getKeyFromNode_   = null;
 var findDomNode_  = ReactDOM.findDOMNode;
 var reactClone_   = React.cloneElement;
 var reactCreate_  = React.createElement;
+var reactIsValid_ = React.isValidElement;
 var children2Arr_ = React.Children.toArray;
+
+var hasOwn_ = Base64_.hasOwnProperty;
 
 var ReferenceProps_ = { '$': true, styles: true,
   'tagName.': true, 'isReference.': true, 'hookTo.': true,
@@ -184,6 +187,16 @@ var ctrlExprCmd_ = ['for','if','elif','else'];
 /* function htmlEncode(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 } */
+
+function boolToStr_(b) {
+  return b? '1': '';
+}
+
+function isUnderBody_(comp) {
+  var owner = comp.parentOf(true);
+  return (owner && owner.widget === topmostWidget_) || false;
+}
+utils.isUnderBody = isUnderBody_;
 
 function keyOfNode_(node) {
   if (!getKeyFromNode_) {
@@ -411,6 +424,70 @@ utils.mergeClass = function(comp,cls) {
   return utils.removeClass(comp,bRmv,bAdd);
 };
 
+// sClsList = klassNames_('cls_a')
+// sClsList = klassNames_(['cls_b','cls_c'])
+// sClsList = klassNames_({cls_d:true,cls_e:false})
+// sClsList = klassNames_('cls_a',['cls_b'],{cls_c:true})
+function klassNames_() {
+  var bKlass = [];
+  
+  for (var i = 0; i < arguments.length; i++) {
+    var arg = arguments[i];
+    if (!arg) continue;
+    
+    var argType = typeof arg;
+    if (argType === 'string' || argType === 'number')
+      bKlass.push(arg);
+    else if (Array.isArray(arg))
+      bKlass.push(klassNames_.apply(null, arg));
+    else if (argType === 'object') {
+      for (var key in arg) {
+        if (hasOwn_.call(arg, key) && arg[key])
+          bKlass.push(key);
+      }
+    }
+  }
+  
+  return bKlass.join(' ');
+}
+utils.klassNames = klassNames_;
+
+function clearKlass_(s,ctrlCls) {
+  var b = s.split(/ +/);
+  for (var i = b.length-1; i >= 0; i--) {
+    var ss = b[i];
+    if (!ss || ctrlCls[ss]) b.splice(i,1);
+  }
+  return b.join(' ');
+}
+utils.clearKlass = clearKlass_;
+
+function containKlass_(s,cls) {
+  if (Array.isArray(cls)) {
+    var i, iLen = cls.length;
+    for (i=0; i < iLen; i++) {
+      if (containKlass_(s,cls[i]))
+        return true;
+    }
+    return false;
+  }
+  
+  if (cls && typeof cls == 'string') {
+    var iPos = s.indexOf(cls);
+    while (iPos >= 0) {
+      var preOk = (iPos == 0 || s[iPos-1] == ' ');
+      if (preOk) {
+        var ch = s[iPos+cls.length];
+        if (!ch || ch == ' ')  // post also OK
+          return true;
+      }
+      iPos = s.indexOf(cls, iPos + cls.length);
+    }
+  }
+  return false;
+}
+utils.containKlass = containKlass_;
+
 var re_react_key_ = /^(\.\$)+/g;
 
 function getElementKey_(child) {
@@ -507,7 +584,6 @@ function setupRenderProp_(comp,dStyle) {
     props['data-group.opt'] = lnkPath;  // help for designer
   return props;
 }
-utils.setupRenderProp = setupRenderProp_;
 
 utils.bindMountData = function(data) {
   if (!data) data = W.$dataSrc;
@@ -640,7 +716,7 @@ function fireTrigger_(oldData,comp) {
         console.log('warning: can not find target (' + sPath + ')');
         return;
       }
-      if (!targ.duals.hasOwnProperty(sAttr)) return;  // ignore, no warning
+      if (!hasOwn_.call(targ.duals,sAttr)) return;  // ignore, no warning
       
       setTimeout( function() {
         targ.duals[sAttr] = ex.update(targ.duals[sAttr],modifier);
@@ -679,8 +755,41 @@ function chooseIdentical_(iOld) {
   return iOld === identicalId_? identicalId(): identicalId_;
 }
 
-utils.setChildren = function(comp,children,callback) {
+utils.setChildren = function(comp,children,insertEle,callback) {
+  if (typeof insertEle == 'function') {
+    callback = insertEle;
+    insertEle = undefined;
+  }
+  
+  var gui = comp.$gui;
+  if (!children) children = gui.comps; // pass null, means $gui.comps
+  if (insertEle) {
+    if (gui.isPanel || comp.widget === topmostWidget_) {  // fatal error
+      console.log('error: invalid argument (insertEle) for panel');
+      insertEle = undefined;
+    }
+    else {
+      if (!reactIsValid_(insertEle) || insertEle.props['childInline.'] !== undefined) {
+        console.log('error: invalid argument (insertEle)');
+        insertEle = undefined;
+      }
+    }
+  }
+  
   if (!Array.isArray(children)) return; // fatal error
+  
+  if (children === gui.comps) {
+    if (insertEle || insertEle === null) gui.insertEle = insertEle;
+    if (callback) {
+      if (gui.inSync) {
+        setTimeout( function() {
+          callback();
+        },0);
+      }
+      else callback();
+    }
+    return;  // no need analyse
+  }
   
   var bChild = [], argLen = children.length;
   for (var i = 0; i < argLen; i++) {
@@ -689,12 +798,12 @@ utils.setChildren = function(comp,children,callback) {
       loadReactTreeEx_(bChild, item, W.$staticNodes, W.$cachedClass);
     else if (typeof item == 'string')
       bChild.push(reactCreate_(comp.props['childInline.']?Span__:P__,{'html.':item})); // item maybe ''
-    else if (React.isValidElement(item))
+    else if (reactIsValid_(item))
       bChild.push(item);
     // else, unknown format, ignore it
   }
   
-  var gui = comp.$gui, existNum = 0, rmvEx = 0;
+  var existNum = 0, rmvEx = 0;
   bChild.forEach( function(item,idx) {
     // if (!item) return;
     
@@ -709,7 +818,7 @@ utils.setChildren = function(comp,children,callback) {
       return;
     }
     
-    if (item.props['tagName.']) {  // is shadow widget node
+    if (item.props['childInline.'] !== undefined) { // is shadow widget node
       var iTmp = parseInt(sKey);
       var dProp = { key: sKey,     // no need set 'hookTo.'
         'keyid.': (iTmp+'')===sKey?iTmp:sKey,
@@ -722,6 +831,7 @@ utils.setChildren = function(comp,children,callback) {
   // gui.removeNum only can increase, can not decrease
   gui.removeNum += Math.max(0,gui.comps.length - existNum) + rmvEx;
   gui.comps = bChild;
+  if (insertEle || insertEle === null) gui.insertEle = insertEle;
   
   if (!gui.inSync) {
     if (gui.compState >= 2) {
@@ -946,7 +1056,7 @@ ex.regist('tagValue', function(modifier) { // for: ex.update(data,{$set_$merge:{
             root2.time = tm;
           }
           else {
-            if (item.hasOwnProperty('value'))
+            if (hasOwn_.call(item,'value'))
               item.time = {$set:tm};
             // else, ignore
           }
@@ -1191,7 +1301,7 @@ ex.regist('jsonp', function(req,initValue) {
   var info = this.evalInfo(), comp = null, sKey = '';
   if (info) {
     comp = info[0]; sKey = info[1];
-    if (initValue && comp && comp.duals.hasOwnProperty(sKey)) {
+    if (initValue && comp && hasOwn_.call(comp.duals,sKey)) {
       if (comp.state[sKey] === undefined)
         comp.duals[sKey] = initValue;
     }
@@ -1200,7 +1310,7 @@ ex.regist('jsonp', function(req,initValue) {
   // req.callback should not pre-defined
   req = Object.assign({},req);
   req.callback = function(ret) {
-    if (comp && sKey && comp.duals.hasOwnProperty(sKey))
+    if (comp && sKey && hasOwn_.call(comp.duals,sKey))
       comp.duals[sKey] = ret;  // ret maybe null, if req.notifyError is true and request failed
   };
   utils.jsonp(req);
@@ -1211,7 +1321,7 @@ ex.regist('ajax', function(req,initValue) {
   var info = this.evalInfo(), comp = null, sKey = '';
   if (info) {
     comp = info[0]; sKey = info[1];
-    if (initValue && comp && sKey && comp.duals.hasOwnProperty(sKey)) {
+    if (initValue && comp && sKey && hasOwn_.call(comp.duals,sKey)) {
       if (comp.state[sKey] === undefined)
         comp.duals[sKey] = initValue;  // initValue should be {status:xx, data:xx}
     }
@@ -1219,11 +1329,11 @@ ex.regist('ajax', function(req,initValue) {
   
   // req.success and req.error should not pre-defined
   req.success = function(ret) {
-    if (comp && sKey && comp.duals.hasOwnProperty(sKey))
+    if (comp && sKey && hasOwn_.call(comp.duals,sKey))
       comp.duals[sKey] = {status:'success',data:ret};
   };
   req.error = function(xhr,statusText) {
-    if (comp && sKey && comp.duals.hasOwnProperty(sKey))
+    if (comp && sKey && hasOwn_.call(comp.duals,sKey))
       comp.duals[sKey] = {status:statusText || 'error',data:null};
   };
   utils.ajax(req);
@@ -1775,7 +1885,7 @@ function evalInSpace(bAst,rootSpace) {
       return NaN;
     else {
       var ret = rootSpace[sId];
-      if (ret === undefined && !rootSpace.hasOwnProperty(sId))
+      if (ret === undefined && !hasOwn_.call(rootSpace,sId))
         throw new Error('symbol (' + sId + ') not defined');
       else return ret;
     }
@@ -2017,7 +2127,7 @@ function findComponent_(comp,pathFlag,bInfo,parentIdx) {
     while (wdgt) {
       var comp_ = wdgt.component, idx = comp_ && comp_.props['for.index'];
       
-      if (wdgt.$callspace && wdgt.$callspace.hasOwnProperty('flowFlag')) {  // has callspace
+      if (wdgt.$callspace && hasOwn_.call(wdgt.$callspace,'flowFlag')) {  // has callspace
         if (wdgt.$callspace.forSpace) { // two spaces in one comp
           if (pathFlag >= -1) {
             if (pathFlag == -1) {       // go next segment
@@ -2081,7 +2191,7 @@ function findComponent_(comp,pathFlag,bInfo,parentIdx) {
   }
   else { // pathFlag must be string, no need find props['for.index']
     while (wdgt) { // if parentNum == 0 means find from current node
-      if (wdgt.$callspace && wdgt.$callspace.hasOwnProperty('flowFlag')) { // has callspace
+      if (wdgt.$callspace && hasOwn_.call(wdgt.$callspace,'flowFlag')) { // has callspace
         if (parentNum > 0 || wdgt.$callspace.forSpace)    // find from sub node, or from current node and current has two spaces ($$for)
           return getCompByPath_(wdgt.component,pathFlag); // according to nearest callspace
       }
@@ -2516,7 +2626,7 @@ function renewFuncOfExpr_(comp,sKey,sExpr,isExprSetter) {
         }
         else {
           var sKey2 = sHistoryKey + ':' + currKey;
-          if (keyArrive.hasOwnProperty(sKey2)) {
+          if (hasOwn_.call(keyArrive,sKey2)) {
             if (headId == 'strict' && keyArrive[sKey2]) // only log error, not throw
               console.log('error: conflict in strict mode, duals(' + sHistoryKey + ').' + currKey + ' is fired more than one time.');
             keyArrive[sKey2] = true;
@@ -3063,23 +3173,26 @@ function dualFuncOfGetSet_(comp,attr,superSet,setFn,baseDual) {
         }
       }
     }
-    else {
+    else {  // current not in comp.render()
       if (!this.state) {
-        gui.initDuals.push([attr,value]);  // maybe undefine later, but used only when this.duals.attr exists
+        gui.initDuals.push([attr,value]); // maybe undefine later, but used only when this.duals.attr exists
       }
-      else if (isId__ && value == 0) {     // must not use base.setter
+      else if (isId__ && value == 0) {    // must not use base.setter
         var oldValue = this.state.id__;
-        if (oldValue == 0) return;         // if same to old, just ignore
+        if (oldValue == 0) return;        // if same to old, just ignore
         
         this.state.id__ = gui.id__ = value;
-        if (setFn) setFn(value,oldValue);  // no delay // not call superSet
+        if (setFn) setFn(value,oldValue); // no delay // not call superSet
       }
       else {
-        var duals2 = this.state.duals.slice(0); // not remove exist attr // sometime not means 'replace' (but 'update') such as 'style'
-        duals2.push([attr,value]);         // update duals.attr in order
-        setTimeout( function() {
-          comp.setState({duals:duals2});
-        },0); // maybe current in render(), set it in next tick
+        var bNew = gui.duals_;
+        if (bNew)  // still in pending
+          bNew.push([attr,value]);
+        else {
+          bNew = gui.duals_ = this.state.duals.slice(0);
+          bNew.push([attr,value]);
+          comp.setState({duals:bNew});
+        }
       }
     }
   }
@@ -3221,7 +3334,7 @@ function syncProps_(comp) {
               }
               
               var value_ = duals0[sKey] = comp.props[gui.dualAttrs[sKey]];
-              if (duals.hasOwnProperty(sKey)) {
+              if (hasOwn_.call(duals,sKey)) {
                 bWaitPass.push([sKey, value_]);
                 return; // setter must defined
               }
@@ -3236,7 +3349,7 @@ function syncProps_(comp) {
               
               dHasDual[sKey] = true;
               var value_ = duals0[sKey] = comp.props[sKey];
-              if (duals.hasOwnProperty(sKey)) {
+              if (hasOwn_.call(duals,sKey)) {
                 bWaitPass.push([sKey,value_]);
                 return; // setter must defined
               }
@@ -3365,6 +3478,7 @@ function syncProps_(comp) {
         bWaitPass.push(item2);
       });
       gui.initDuals = [];
+      // gui.duals_ = null;  // default is undefined
       
       while (item = bWaitPass.shift()) {
         duals[item[0]] = item[1];   // assign by setter
@@ -3372,6 +3486,7 @@ function syncProps_(comp) {
     }
     else {  // not first render
       exprDict = gui.exprAttrs;
+      gui.duals_ = null;
       
       var duaItem;
       while (duaItem = duals2.shift()) {
@@ -3451,7 +3566,7 @@ function syncProps_(comp) {
                   forChild = fn2(comp,idx);
                   if (!forChild)
                     forChild = null;
-                  else if (!React.isValidElement(forChild) && !Array.isArray(forChild) && typeof forChild != 'string')
+                  else if (!reactIsValid_(forChild) && !Array.isArray(forChild) && typeof forChild != 'string')
                     forChild = null;
                 }
                 catch(e) { // failed, forChild must be null
@@ -3474,7 +3589,7 @@ function syncProps_(comp) {
               if (succ) {
                 var childEle, childProp = {'hookTo.':ownerWdgt,'keyid.':keyid,key:keyid+'','for.index':idx};
                 if (forChild) { // forChild can be: Element, bElementList, sTextString
-                  if (React.isValidElement(forChild) || typeof forChild == 'string')
+                  if (reactIsValid_(forChild) || typeof forChild == 'string')
                     childEle = reactClone_(child,childProp,forChild);
                   else          // forChild must be Array
                     childEle = reactClone_.apply(null,([child,childProp]).concat(forChild));
@@ -3570,7 +3685,6 @@ function syncProps_(comp) {
     else return false;
   }
 }
-utils.syncProps = syncProps_;
 
 // utils.popWin
 //----------
@@ -3609,7 +3723,7 @@ utils.popWin = {
     if (!popFrame && optComp)
       popFrame = getPopFrameOpt_(optComp,popOption);
     var oldChecked = undefined;
-    if (optComp && optComp.props['isOption.'] && optComp.state.hasOwnProperty('data-checked'))
+    if (optComp && optComp.props['isOption.'] && hasOwn_.call(optComp.state,'data-checked'))
       oldChecked = optComp.state['data-checked'];
     
     // ele should come from template or compObj.fullClone()
@@ -3717,7 +3831,7 @@ function getCompRenewProp_(oneObj) {
   var props = Object.assign({},oneObj.props);
   
   bStated.forEach( function(item) {
-    if (props.hasOwnProperty(item))
+    if (hasOwn_.call(props,item))
       props[item] = oneObj.state[item];
   });
   bSilent.forEach( function(item) {
@@ -3807,14 +3921,15 @@ creator.deepCloneReactEle = deepCloneReactEle_;
 
 function quickCheckEqual_(a,b) {
   var iLen;
-  if (Array.isArray(a)) {
+  if (a === b)
+    return true;
+  else if (Array.isArray(a)) {
     if (Array.isArray(b) && (iLen=a.length) == b.length) {
       for (var i=0; i < iLen; i++) {
         if (a[i] !== b[i]) return false;
       }
       return true;
     }
-    else return false;
   }
   else if (a && typeof a == 'object') {
     if (b && typeof b == 'object') {
@@ -3827,9 +3942,8 @@ function quickCheckEqual_(a,b) {
       }
       return true;
     }
-    else return false;
   }
-  else return a === b;
+  return false;
 }
 
 function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
@@ -3887,7 +4001,7 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
       var shadowTemp = getWidgetTempInfo(compObj._);
       var bStated = shadowTemp[1], bSilent = shadowTemp[2];
       bStated.forEach( function(item) {
-        if (dProp.hasOwnProperty(item))  // only fetch back items that in 'link.props'
+        if (hasOwn_.call(dProp,item))  // only fetch back items that in 'link.props'
           dProp[item] = objState[item];
       });
       bSilent.forEach( function(item) {
@@ -3930,7 +4044,7 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
     
     Object.assign(dProp,compObj.props);
     bStated.forEach( function(item) {  // NOT take data-* aria-* as stated props
-      // if (dProp.hasOwnProperty(item)) // maybe last time prop.xx is default
+      // if (hasOwn_.call(dProp,item)) // maybe last time prop.xx is default
       dProp[item] = objState[item];
     });
     bSilent.forEach( function(item) {
@@ -3994,7 +4108,7 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
         else {
           if (hasClass_(child.props.className,'rewgt-static')) {
             if (!compNode)
-              compNode = findDomNode_(compObj);
+              compNode = compObj.getHtmlNode();
             var sName = child.props.name, bHtml = [];
             if (compNode && sName) {
               var node = compNode.querySelector('.rewgt-static[name="' + sName + '"]');
@@ -4158,7 +4272,7 @@ function staticDbClick(event) {
   var wdgt = this.widget;  // 'this' should be owner component
   var sPath = wdgt && wdgt.getPath();
   if (!sPath) return;
-  var tillNode = findDomNode_(this);
+  var tillNode = this.getHtmlNode();
   if (!tillNode) return;
   
   var sName = '', staticNode = event.target;
@@ -4198,7 +4312,7 @@ function staticDbClick(event) {
       compObj = compObj && compObj.component;
       if (!compObj) return;
       
-      var compNode = findDomNode_(compObj), staticNode = null;
+      var compNode = compObj.getHtmlNode(), staticNode = null;
       if (compNode) staticNode = compNode.querySelector('.rewgt-static[name="' + sName + '"]');
       if (staticNode === node) {  // static node still available
         staticNode.innerHTML = sHtml;
@@ -4246,7 +4360,7 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
   function getTemplate(sName,sPrefix) {
     var tp = typeof sName;
     if (tp != 'string') {
-      if (React.isValidElement(sName)) {
+      if (reactIsValid_(sName)) {
         iTagType = 3;
         return sName;   // sName is ReactElement
       }
@@ -4298,7 +4412,7 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
         bRet.push(item);  // react take it as text node
         continue;
       }
-      else if (React.isValidElement(item)) {
+      else if (reactIsValid_(item)) {
         bRet.push(item);
         continue;
       }
@@ -4332,7 +4446,7 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
             continue;
           }
         }
-        else if (React.isValidElement(sName))
+        else if (reactIsValid_(sName))
           isEle = true;
         else if (tp2 != 'function') {
           console.log('warning: unknown react class');
@@ -4428,7 +4542,7 @@ function loadReactTreeEx_(bRet,bTree,bStatic,dTempSet,sPrefix) {
           if (loadReactTreeEx_(bArgs,item,bStatic,dTempSet,sPrefix_))
             hasStatic = true;
         }
-        else if (React.isValidElement(item))
+        else if (reactIsValid_(item))
           bArgs.push(item);
         else if ((tp=typeof item) == 'string')
           bArgs.push(reactCreate_(Span__,{'html.':item}));
@@ -4519,8 +4633,13 @@ function propagateResizing_(comp,inPending) {
   var gui = comp.$gui, wd = gui.cssWidth, hi = gui.cssHeight, pending = !!inPending;
   if (typeof wd != 'number' && typeof hi != 'number') return; // both width and height is auto, ignore
   
+  if (!gui.isPanel) {
+    var b = ([]).concat(comp.state.margin,comp.state.padding);
+    if (b.indexOf(null) >= 0) return;   // if exists auto margin or padding, ignore
+  }
+  
   var newId = 0;
-  gui.comps.forEach(function(child) {
+  gui.comps.forEach( function(child) {
     if (!child) return;
     
     var sKey = getElementKey_(child);
@@ -5479,9 +5598,9 @@ pageCtrl_.prototype = {
   },
   
   setDisplay: function(cfg) {
-    if (cfg.hasOwnProperty('leftCtrlWidth'))
+    if (hasOwn_.call(cfg,'leftCtrlWidth'))
       this.leftPanel.style.width = getPxWidth(cfg.leftCtrlWidth) + 'px';
-    if (cfg.hasOwnProperty('rightCtrlWidth'))
+    if (hasOwn_.call(cfg,'rightCtrlWidth'))
       this.rightPanel.style.width = getPxWidth(cfg.rightCtrlWidth) + 'px';
     
     function getPxWidth(i) {
@@ -5737,7 +5856,7 @@ function setupContainerApi_(containNode_) {
 }
 
 function renewStaticChild(compObj,isForce) {
-  var node = findDomNode_(compObj);
+  var node = compObj.getHtmlNode();
   if (!node) return;
   
   var bScan = [], nodes = node.querySelectorAll('.rewgt-static');
@@ -5874,7 +5993,81 @@ function triggerExprFn_(value,oldValue) { // will auto bind this
   this.state.trigger = value; // default not fire action
 }
 
+function getOnlyChild_(self) {
+  var gui = self.$gui;
+  if (gui.isPanel) {
+    console.log('warning: panel not support virtual widget');
+    return null;
+  }
+  
+  var comps = gui.comps, iLen = comps.length;
+  var sKey = gui.keyid + '', sOwner = self.props['data-rewgt-owner'];
+  if (sOwner) sKey = sOwner + '.' + sKey;
+  
+  for (var i=0; i < iLen; i++) {
+    var item = comps[i];
+    if (item)
+      return reactClone_(item,{'data-rewgt-owner':sKey});
+  }
+  return null;
+}
+
+function wrapCompEvt_(comp,sEvName,ownerKey) {
+  var evName = '$' + sEvName, oldFn = comp[evName];
+  
+  var retFn = ( function() {
+    if (typeof oldFn == 'function')
+      oldFn.apply(comp,arguments);
+    
+    if (ownerKey && comp.$gui.eventset2[sEvName]) {
+      var wdgt = comp.widget, wdgt2 = wdgt && wdgt.parent, comp2 = wdgt2 && wdgt2.component;
+      if (comp2) {
+        var fn2 = comp2.$gui.eventset[sEvName];
+        if (fn2) fn2.apply(comp2,arguments);
+      }
+    }
+  });
+  
+  if (ownerKey) comp[evName] = retFn; // if not join parent's event, no need assign comp[evName]
+  return retFn;
+}
+
+function middleClone_(insEle,bChild) {
+  var children = insEle.props.children;
+  if (children) {
+    children = children2Arr_(children);
+    
+    var lastEle, iLast = children.length - 1;
+    if (iLast >= 0 && reactIsValid_(lastEle=children[iLast])) {
+      if (iLast >= 1 && getElementKey_(lastEle) !== 'foo') { // try clone bChild in elementOf(key='foo')
+        var iLoop = iLast - 1;
+        while (iLoop >= 0) {
+          var tmp = children[iLoop];
+          if (reactIsValid_(tmp) && getElementKey_(tmp) === 'foo') {
+            var b2 = children.slice(0,iLoop);
+            b2.push(middleClone_(tmp,bChild));
+            for (var ii=iLoop+1; ii <= iLast; ii++) {
+              b2.push(children[ii]);
+            }
+            b2.unshift(insEle,{});
+            return reactClone_.apply(null,b2);
+          }
+          else iLoop -= 1;
+        }
+      }
+      
+      var b = children.slice(0,-1);
+      b.push(middleClone_(lastEle,bChild)); // always choose last child to append
+      b.unshift(insEle,{});
+      return reactClone_.apply(null,b);
+    }
+  }
+  return reactClone_(insEle,{},[...bChild]);
+}
+
 var _hyphenPattern = /-(.)/g;
+
+var direct_list_ = ['Top','Right','Bottom','Left'];
 
 class TWidget_ {
   constructor(name,desc) {
@@ -5994,7 +6187,7 @@ class TWidget_ {
       if (!temp) console.log('fatal error: invalid WTC (' + this._className + ')');
       return temp;
     }
-    return createClass_(this._extend(defs || {}));
+    return createClass_(this._extend(defs));
   }
   
   _getGroupOpt(self) {
@@ -6025,7 +6218,7 @@ class TWidget_ {
       margin:    [iLevel+11,'any',null,sPerPixel3],
     };
     
-    if (self && (owner = self.parentOf()) && owner.props['isTableRow.'])
+    if (self && (owner = self.parentOf(true)) && owner.props['isTableRow.'])
       dRet.tdStyle = [iLevel+12,'object',null,'[object]: style for parent (td)'];
     return dRet;
   }
@@ -6046,6 +6239,16 @@ class TWidget_ {
   }
   
   defineDual(attr,setFn,initVal,base) {
+    if (Array.isArray(attr)) {
+      var i, iLen = attr.length;
+      for (i=0; i < iLen; i++) {
+        var sAttr = attr[i];
+        if (sAttr && typeof sAttr == 'string')
+          this.defineDual(sAttr,setFn,initVal,base);
+      }
+      return this;
+    }
+    
     var duals = this.duals, gui = this.$gui;
     if (gui && gui.compState >= 2) {
       console.log('error: can not define duals.' + attr + ' after first render');
@@ -6067,6 +6270,10 @@ class TWidget_ {
       Object.defineProperty(duals,attr, { enumerable:true, configurable:true,
         get:bFn[0], set:bFn[1],
       });
+      
+      var iFlag = supportedAttr_[attr];
+      if (iFlag && iFlag != 5)   // 5: className/style/width/height
+        gui.tagAttrs.push(attr);
     }
     else {   // oldDesc.set must defined
       if (setFn) { // need embed setFn to oldDesc, but no duplicate trigger listen
@@ -6086,6 +6293,16 @@ class TWidget_ {
   }
   
   undefineDual(attr) {
+    if (Array.isArray(attr)) {
+      var i, iLen = attr.length;
+      for (i=0; i < iLen; i++) {
+        var sAttr = attr[i];
+        if (sAttr && typeof sAttr == 'string')
+          this.undefineDual(sAttr);
+      }
+      return this;
+    }
+    
     var gui = this.$gui, duals = this.duals;
     if (gui && gui.compState >= 2) {
       console.log('error: undefineDual(' + attr + ') only can be called before first render');
@@ -6104,16 +6321,19 @@ class TWidget_ {
     }
     delete duals[attr];
     
+    var iPos = gui.tagAttrs.indexOf(attr);
+    if (iPos >= 0) gui.tagAttrs.splice(iPos,1); // remove from tagAttrs also
+    
     return this; // can write as: this.undefineDual(attr1).undefineDual(attr2)
   }
   
   setEvent(evSet) {
-    var gui = this.$gui, eventset = gui && gui.eventset;
-    if (!gui || !eventset) {
+    var eventset, gui = this.$gui;
+    if (!gui || !(eventset=gui.eventset)) {
       console.log('error: invalid state for setEvent().');
       return;
     }
-    if (gui.compState > 1) {
+    if (gui.compState >= 2) {
       console.log('error: can not call setEvent() after first render.');
       return;
     }
@@ -6121,12 +6341,19 @@ class TWidget_ {
     var b = Object.keys(evSet);
     for (var i=0,sKey; sKey=b[i]; i++) {
       if (sKey[0] != '$') continue;
-      var sKey2 = sKey.slice(1), fn = evSet[sKey];
-      if (typeof fn == 'function') {
-        if (!eventset[sKey2])
-          eventset[sKey2] = fn.bind(this);
-        this[sKey] = fn;
-      }
+      var sKey2 = sKey.slice(1);
+      if (sKey2[0] == '$') continue;  // ignore $$onXX
+      
+      var fn = evSet[sKey];
+      if (typeof fn == 'function')
+        this[sKey] = eventset[sKey2] = chainFunc(fn,eventset[sKey2],this);
+    }
+    
+    function chainFunc(fn,oldFn,comp) {
+      return ( function() {
+        fn.apply(comp,arguments);
+        if (oldFn) oldFn.apply(comp,arguments);
+      });
     }
   }
   
@@ -6156,7 +6383,6 @@ class TWidget_ {
     gui.forExpr = false; gui.hasIdSetter = false;
     
     var currEvSet = {}, evSet_=this.$eventset || [{},{}], evSet=evSet_[0], sysEvSet=evSet_[1];
-    delete this.$eventset; // $eventset is passed in _extend()
     
     var dualIdSetter = null;
     var b = Object.keys(this.props);
@@ -6212,7 +6438,7 @@ class TWidget_ {
             }
             else {
               if (item == 'children') {
-                if (this.props.hasOwnProperty('for.index')) { // $children only used under forExpr
+                if (hasOwn_.call(this.props,'for.index')) { // $children only used under forExpr
                   gui.isChildExpr = true;
                   gui.children2 = this.props.children;
                 }
@@ -6230,14 +6456,12 @@ class TWidget_ {
             continue;
           }
           
-          item = item.slice(1);
-          if (item == 'id__') { // pass setter by props.$id__
+          var item2 = item.slice(1);
+          if (item2 == 'id__') { // pass setter by props.$id__
             dualIdSetter = itemValue;  // will bind this in defineDual('id__')
             gui.hasIdSetter = true;
           }
-          else if (!sysEvSet[item])
-            currEvSet[item] = itemValue.bind(this);
-          // else, ignore
+          else this[item] = currEvSet[item2] = itemValue.bind(this);
         }
         // else ignore  // $XX only can be string or function, ignore others
       }
@@ -6250,30 +6474,7 @@ class TWidget_ {
     gui.flowFlag = flowFlag;
     gui.dataset2 = dataset.slice(0);
     
-    // step 3: setup gui.eventset
-    for (var sEvName in evSet) {
-      eventset[sEvName] = this['$' + sEvName];
-    }
-    for (var sEvName in currEvSet) {
-      eventset[sEvName] = currEvSet[sEvName];
-    }
-    for (var sEvName in sysEvSet) {
-      eventset[sEvName] = this['$$' + sEvName];
-    }
-    
-    // step 4: prepare dState
-    if (isTopmost) // topmost can not be panel, NOT render children as flex
-      gui.className = removeClass_(gui.className, ['rewgt-panel', 'row-reverse', 'reverse-row', 'col-reverse', 'reverse-col']);
-    Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
-    var dState = { id__:0, childNumId:0, duals:[], 'tagName.':this.props['tagName.'],
-      exprAttrs:exprAttrs.slice(0),
-    }; // state.duals = [[attr,newValue], ...]
-    if (W.__design__) {
-      var d = template._getGroupOpt(this); // has hooked, this.widget should be OK
-      dState['data-group.opt'] = d.type + '/' + d.editable; // no props['data-group.opt'], also not in $gui.dataset
-    }
-    
-    // step 5: hook parent widget
+    // step 3: hook parent widget
     var keyid = this.props['keyid.'];
     if (isTopmost && !keyid) keyid = 'body';
     if (keyid) {
@@ -6290,6 +6491,39 @@ class TWidget_ {
         owner.$set(keyid,owner.W(this));
       else keyid = owner.push(owner.W(this)) - 1;
       gui.keyid = keyid;
+    }
+    
+    // step 4: setup gui.eventset
+    var virtualKey = this.props['data-rewgt-owner'];
+    if (virtualKey) {
+      var ownerComp, evtset2 = gui.eventset2 = {};
+      if (owner && (ownerComp=owner.component)) {
+        var b = Object.keys(ownerComp.$gui.eventset);
+        for (var i=0,item; item=b[i]; i++) {
+          eventset[item] = wrapCompEvt_(this,item,virtualKey);
+          evtset2[item] = true;
+        }
+      }
+    }
+    
+    var wrapKeys = Object.assign({},evSet,currEvSet);
+    for (var sEvName in wrapKeys) {
+      eventset[sEvName] = wrapCompEvt_(this,sEvName,virtualKey);
+    }
+    for (var sEvName in sysEvSet) {
+      eventset[sEvName] = this['$$'+sEvName]; // maybe overwrite
+    }
+    
+    // step 5: prepare dState
+    if (isTopmost) // topmost can not be panel, NOT render children as flex
+      gui.className = removeClass_(gui.className, ['rewgt-panel', 'row-reverse', 'reverse-row', 'col-reverse', 'reverse-col']);
+    Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
+    var dState = { id__:0, childNumId:0, duals:[], 'tagName.':this.props['tagName.'],
+      exprAttrs:exprAttrs.slice(0),
+    }; // state.duals = [[attr,newValue], ...]
+    if (W.__design__) {
+      var d = template._getGroupOpt(this); // has hooked, this.widget should be OK
+      dState['data-group.opt'] = d.type + '/' + d.editable; // no props['data-group.opt'], also not in $gui.dataset
     }
     
     // step 6: setup frame property, such as: left, top, width, height
@@ -6343,7 +6577,7 @@ class TWidget_ {
       this.state.width = newValue;
       
       if (isNum) {
-        var owner = this.parentOf();
+        var owner = this.parentOf(true);
         if (owner && owner.$gui.useSparedX)
           renewWidgetSpared_(owner,false);
       }
@@ -6359,7 +6593,7 @@ class TWidget_ {
       this.state.height = newValue;
       
       if (isNum) {
-        var owner = this.parentOf();
+        var owner = this.parentOf(true);
         if (owner && owner.$gui.useSparedY)
           renewWidgetSpared_(owner,false);
       }
@@ -6398,7 +6632,7 @@ class TWidget_ {
     });
     this.defineDual('borderWidth', function(value,oldValue) {
       var oldV = oldValue || [0,0,0,0];
-      var newV = this.state.borderWidth = parseWidth(value);
+      var newV = this.state.borderWidth = parseWidth(value,!gui.isPanel);
       
       var changed = false;
       if (this.$gui.useSparedX) {
@@ -6412,22 +6646,23 @@ class TWidget_ {
       if (changed) renewWidgetSpared_(this,false);
     });
     this.defineDual('padding', function(value,oldValue) {
-      var oldV = oldValue || [0,0,0,0];
-      var newV = this.state.padding = parseWidth(value);
+      var spareX, newV = this.state.padding = parseWidth(value,!gui.isPanel);
       
-      var changed = false;
-      if (this.$gui.useSparedX) {
-        if (oldV[1] !== newV[1] || oldV[3] !== newV[3])
-          changed = true;
+      if ((spareX=this.$gui.useSparedX) || this.$gui.useSparedX) {
+        var changed = false, oldV = oldValue || [0,0,0,0];
+        if (spareX) {
+          if (oldV[1] !== newV[1] || oldV[3] !== newV[3])
+            changed = true;
+        }
+        else { // this.$gui.useSparedY
+          if (oldV[0] !== newV[0] || oldV[2] !== newV[2])
+            changed = true;
+        }
+        if (changed) renewWidgetSpared_(this,false);
       }
-      else if (this.$gui.useSparedY) {
-        if (oldV[0] !== newV[0] || oldV[2] !== newV[2])
-          changed = true;
-      }
-      if (changed) renewWidgetSpared_(this,false);
     });
     this.defineDual('margin', function(value,oldValue) {
-      this.state.margin = parseWidth(value);
+      this.state.margin = parseWidth(value,!gui.isPanel);
     });
     this.defineDual('id__', function(value,oldValue) { // should not use props.id__
       this.state.id__ = value;      // is first render when oldValue == 0
@@ -6514,7 +6749,7 @@ class TWidget_ {
             parentWidth: iWd, parentHeight: iHi, innerSize: newSize,
           });
           
-          if (this.duals.hasOwnProperty('innerSize')) { // can not assign duals.innerSize, but can trigger listen
+          if (hasOwn_.call(this.duals,'innerSize')) { // can not assign duals.innerSize, but can trigger listen
             var bConn = gui.connectTo['innerSize'];
             if (bConn && gui.compState >= 2) { // not trigger when first render
               setTimeout( function() {
@@ -6581,8 +6816,10 @@ class TWidget_ {
       
       bComp.forEach( function(child,iPos) {
         if (typeof child == 'string') {
-          if (iPos == 0 && bComp.length == 1 && thisObj.duals.hasOwnProperty('html.')) {
-            thisObj.state['html.'] = child;
+          if (iPos == 0 && bComp.length == 1 && hasOwn_.call(thisObj.duals,'html.')) {
+            setTimeout( function() {
+              thisObj.duals['html.'] = child;
+            },0);
             needClear = true;
             return;
           }
@@ -6780,29 +7017,46 @@ class TWidget_ {
     
     return dState;
     
-    function parseWidth(b) {
+    function parseWidth(b,checkNull) {
       if (!Array.isArray(b)) {
         if (typeof b == 'number')
           return [b, b, b, b];
-        else return [0, 0, 0, 0];
+        else {
+          if (checkNull && b === null)
+            return [null,null,null,null];
+          else return [0,0,0,0];
+        }
       }
       
       var iLen = b.length;
       if (iLen == 0)
-        return [0, 0, 0, 0];
+        return [0,0,0,0];
       else if (iLen == 1) {
-        var i = parseFloat(b[0]) || 0;
+        var i = b[0];
+        i = (checkNull && i === null? null: parseFloat(i) || 0);
         return [i, i, i, i];
       }
       else if (iLen == 2) {
-        var i = parseFloat(b[0]) || 0, i2 = parseFloat(b[1]) || 0;
+        var i = b[0], i2 = b[1];
+        i = (checkNull && i === null? null: parseFloat(i) || 0);
+        i2 = (checkNull && i2 === null? null: parseFloat(i2) || 0);
         return [i, i2, i, i2];
       }
       else if (iLen == 3) {
-        var i = parseFloat(b[0]) || 0, i2 = parseFloat(b[1]) || 0, i3 = parseFloat(b[2]) || 0;
+        var i = b[0], i2 = b[1], i3 = b[2];
+        i = (checkNull && i === null? null: parseFloat(i) || 0);
+        i2 = (checkNull && i2 === null? null: parseFloat(i2) || 0);
+        i3 = (checkNull && i3 === null? null: parseFloat(i3) || 0);
         return [i, i2, i3, i2];
       }
-      else return [parseFloat(b[0]) || 0, parseFloat(b[1]) || 0, parseFloat(b[2]) || 0, parseFloat(b[3]) || 0];
+      else {
+        var i = b[0], i2 = b[1], i3 = b[2], i4 = b[3];
+        i = (checkNull && i === null? null: parseFloat(i) || 0);
+        i2 = (checkNull && i2 === null? null: parseFloat(i2) || 0);
+        i3 = (checkNull && i3 === null? null: parseFloat(i3) || 0);
+        i4 = (checkNull && i4 === null? null: parseFloat(i4) || 0);
+        return [i,i2,i3,i4];
+      }
     }
   }
   
@@ -6810,25 +7064,9 @@ class TWidget_ {
     var ret = utils.shouldUpdate(this,nextProps,nextState);
     
     if (ret && this.props.children !== nextProps.children && !this.props['marked.']) {
-      var gui = this.$gui, duals = this.duals, duals0 = gui.duals;
-      var child2 = duals0.children = nextProps.children;
-      var b = gui.comps = children2Arr_(child2), wdgt = this.widget;
-      
-      // children be changed by utils.setChildren(), adding 'hookTo.' since no trigger duals.childNumId
-      b.forEach(function (ele, idx) {
-        if (!ele) return;
-        if (ele.props['tagName.']) {
-          var sKey = getElementKey_(ele);
-          if (!sKey) return;
-          
-          var iTmp = parseInt(sKey);
-          var dProp = { key: sKey,
-            'keyid.': iTmp + '' === sKey ? iTmp : sKey,
-            'hookTo.': wdgt
-          };
-          b[idx] = reactClone_(ele,dProp);
-        }
-      });
+      var gui = this.$gui, child2 = gui.duals.children = nextProps.children;
+      gui.comps = children2Arr_(child2);
+      gui.removeNum += 1;  // trigger duals.childNumId
     }
     
     return ret;
@@ -6936,6 +7174,7 @@ class TWidget_ {
       delete this.widget;
     }
     
+    gui.eventset = {};
     this.isHooked = false;
   }
   
@@ -6975,7 +7214,7 @@ class TWidget_ {
         // else, all other :expr is listenable
         return true;
       }
-      else if (gui.dataset.indexOf(sKey) >= 0 || gui.tagAttrs.indexOf(sKey) >= 0 || gui.dualAttrs.hasOwnProperty(sKey)) {
+      else if (gui.dataset.indexOf(sKey) >= 0 || gui.tagAttrs.indexOf(sKey) >= 0 || hasOwn_.call(gui.dualAttrs,sKey)) {
         var bFn = dualFuncOfGetSet_(self,sKey); // no super setter and no custom setter
         Object.defineProperty(self.duals,sKey, { enumerable:true, configurable:true,
           get:bFn[0], set:bFn[1],
@@ -7049,7 +7288,7 @@ class TWidget_ {
       
       if (typeof targ[sTarName] != 'function') {
         var sDualName = item[2];
-        if (sDualName && targ.duals.hasOwnProperty(sDualName)) {
+        if (sDualName && hasOwn_.call(targ.duals,sDualName)) {
           if (sDualName === sSrcName && targ === self) {
             console.log('warning: can not connect dual (' + sSrcName + ') to self.');
             return;
@@ -7178,13 +7417,80 @@ class TWidget_ {
   }
   
   getHtmlNode(component) {
-    return findDomNode_(component || this);
+    if (!this.state['tagName.'] && !component) { // try get only child node when no 'tagName.'
+      var wdgt = this.widget;
+      if (wdgt) {
+        var b = Object.keys(wdgt), iLen = b.length, childComp = null;
+        for (var i = 0; i < iLen; i++) {
+          var sKey = b[i];
+          if (sKey == 'parent' || sKey == 'component') continue;
+          var item = wdgt[sKey];
+          if (typeof item == 'object' && item.W === W.W) {
+            childComp = item.component;
+            break;
+          }
+        }
+        if (childComp) return childComp.getHtmlNode();
+      }
+      return null;
+    }
+    else return findDomNode_(component || this);
   }
   
-  parentOf() {
-    var wdgt = this.widget, owner = wdgt && wdgt.parent;
+  parentOf(noVirtual,sRole) {
+    var self = this, wdgt = self.widget, owner = wdgt && wdgt.parent;
     var ownerObj = owner && owner.component;
+    if (noVirtual) {
+      while (ownerObj && (self.props['data-rewgt-owner'] || (sRole && ownerObj.state.role !== sRole))) {
+        // has 'data-rewgt-owner' means ownerObj is virtual // check props.role is expected or not
+        self = ownerObj;
+        owner = owner.parent;
+        ownerObj = owner && owner.component;
+      }
+    }
+    else {
+      while (sRole && ownerObj && ownerObj.state.role !== sRole) {
+        owner = owner.parent;
+        ownerObj = owner && owner.component;
+      }
+    }
     return ownerObj || null;
+  }
+  
+  childOf(sKey,noVirtual) {
+    var i, self = this, wdgt = self.widget;
+    if (noVirtual) {
+      while (wdgt) {
+        var comps = self.$gui.comps, iLen = comps.length;
+        for (i=0; i < iLen; i++) {
+          var child = comps[i];
+          if (!child) continue;
+          
+          var sKey2 = getElementKey_(child);
+          child = sKey2 && wdgt[sKey2];
+          
+          var childComp = child && child.component;
+          if (childComp) {  // try any child, ignore sKey
+            if (!childComp.props['data-rewgt-owner'])
+              return (sKey? childComp.childOf(sKey): childComp);
+            else {
+              wdgt = child; self = childComp;
+              break;
+            }
+          }
+          else return null; // fatal error
+        }
+        if (i >= iLen) return null;  // out of loop range
+      }
+    }
+    else {
+      if (sKey) {
+        var child = wdgt[sKey];
+        return (child && child.component) || null;
+      }
+    }
+    
+    return null;
   }
   
   componentOf(sPath) {
@@ -7400,7 +7706,7 @@ class TWidget_ {
             callback = arg;  // transcate it
             break;
           }
-          else if (arg && React.isValidElement(arg))
+          else if (arg && reactIsValid_(arg))
             setTemplateChild_(template,arg);
           // else, ignore
         }
@@ -7502,7 +7808,7 @@ class TWidget_ {
           if (iPos < 0) lastOp = ''; // change to append or replace
         } // else, lastOp = ''
       }
-      else if (arg && React.isValidElement(arg)) {
+      else if (arg && reactIsValid_(arg)) {
         if (hasClass_(arg.props.className,'rewgt-static')) {
           console.log('warning: setChild() not support rewgt-static.');
           lastOp = ''; lastKeyid = undefined; // current finished
@@ -7626,7 +7932,7 @@ class TWidget_ {
               if (iPos2 < 0) lastOp2 = ''; // change to append or replace
             } // else, lastOp2 = ''
           }
-          else if (arg2 && React.isValidElement(arg2)) {
+          else if (arg2 && reactIsValid_(arg2)) {
             if (hasClass_(arg2.props.className,'rewgt-static')) {
               console.log('warning: setChild() not support rewgt-static.');
               lastOp2 = ''; lastKeyid2 = undefined; // current finished
@@ -7821,38 +8127,63 @@ class TWidget_ {
     }
   }
   
-  prepareState() {  // only for panel/unit/paragraph
-    function percentPx(parentWd, WD, canNeg) {
-      var wd;
-      if (WD >= 1)
-        wd = WD;
+  prepareState() {   // only for panel/unit/paragraph
+    function percentPx(parentWd, WD, noNeg) {
+      var wd = WD || 0;  // ensure it is number  // null --> 0
+      
+      if (wd >= 1 || wd == 0)
+        return wd;
+      else if (wd <= -1)
+        return (noNeg? 0: wd);
+      
       else if (typeof parentWd != 'number')
         return null;
-      else if (WD >= 0.9999)
-        wd = parentWd;
-      else if (WD >= 0)
-        wd = WD * parentWd;
-      else wd = WD;
       
-      if (wd < 0) {
-        if (canNeg) {
-          if (wd > -0.9999)
-            return wd * parentWd;
-          else if (wd > -1)
-            return -parentWd;
-          else return wd;
-        }
-        else return 0;
+      else if (wd >= 0.9999)   // 100%
+        return parentWd;
+      else if (wd >= 0)
+        return wd * parentWd;
+      else {
+        if (noNeg) return 0;
+        if (wd > -0.9999)
+          return wd * parentWd;
+        else return -parentWd; // -100%
       }
-      else return wd;
     }
     
-    function toCssString(WD, perAsZero) {
-      if (WD >= 1) return WD + 'px';
+    function toCssString(WD, perAsZero, noNeg) {
+      if (WD === null)
+        return '';
+      else if (WD >= 1)
+        return WD + 'px';
       else {
+        if (WD == 0 || (noNeg && WD < 0)) return '0';
+        if (WD <= -1) return WD + 'px';
+        
+        if (perAsZero) return '0';
+        if (WD >= 0.9999)
+          return '100%';
+        else if (WD <= -0.9999)
+          return '-100%';
+        else return (WD * 100) + '%';
+      }
+    }
+    
+    function percentPx2(parentWd,WD,perAsZero,noNeg) {
+      if (WD === null || WD >= 1)
+        return WD;
+      else {
+        if (WD == 0 || (noNeg && WD < 0)) return 0;
+        if (WD <= -1) return WD;
+        
+        if (typeof parentWd != 'number') return null;
+        
         if (perAsZero) return 0;
-        if (WD > 0.9999) return '100%';
-        else return WD * 100 + '%';
+        if (WD >= 0.9999)
+          return parentWd;
+        else if (WD <= -0.9999)
+          return -parentWd;
+        else return WD * parentWd;
       }
     }
     
@@ -7860,57 +8191,59 @@ class TWidget_ {
     var parentWdAuto = typeof parentWd != 'number', parentHiAuto = typeof parentHi != 'number';
     var wgtPadding = this.state.padding, wgtBorder = this.state.borderWidth, wgtMargin = this.state.margin;
     var iLeft = null, iTop = null;
-    if (typeof this.state.left == 'number') iLeft = percentPx(parentWd, this.state.left,true);
-    if (typeof this.state.top == 'number') iTop = percentPx(parentHi, this.state.top,true);
+    if (typeof this.state.left == 'number') iLeft = percentPx(parentWd, this.state.left,false);
+    if (typeof this.state.top == 'number') iTop = percentPx(parentHi, this.state.top,false);
     
-    var iPadT, iPadR, iPadB, iPadL, sPadding = '';
-    var iBrdT, iBrdR, iBrdB, iBrdL, sBorderWd = '';
-    var iMrgT, iMrgR, iMrgB, iMrgL, sMargin = '';
+    var bPad0 = [0,0,0,0], bBrd0 = [0,0,0,0], bMrg0 = [0,0,0,0], style0 = {};
     if (parentWdAuto) {
-      iPadT = iPadR = iPadB = iPadL = 0;
-      sPadding = toCssString(wgtPadding[0],false) + ' ' + toCssString(wgtPadding[1],false) + ' ' + toCssString(wgtPadding[2],false) + ' ' + toCssString(wgtPadding[3],false);
-      iBrdT = iBrdR = iBrdB = iBrdL = 0;
-      sBorderWd = toCssString(wgtBorder[0],true) + ' ' + toCssString(wgtBorder[1],true) + ' ' + toCssString(wgtBorder[2],true) + ' ' + toCssString(wgtBorder[3],true);
-      iMrgT = iMrgR = iMrgB = iMrgL = 0;
-      sMargin = toCssString(wgtMargin[0],false) + ' ' + toCssString(wgtMargin[1],false) + ' ' + toCssString(wgtMargin[2],false) + ' ' + toCssString(wgtMargin[3],false);
+      wgtPadding.forEach( function(item,idx) {
+        style0['padding'+direct_list_[idx]] = toCssString(item,false,true);  // maybe ''
+      });
+      wgtBorder.forEach( function(item,idx) {
+        style0['border'+direct_list_[idx]+'Width'] = toCssString(item,true,true); // maybe ''
+      });
+      wgtMargin.forEach( function(item,idx) {
+        style0['margin'+direct_list_[idx]] = toCssString(item,false,false);  // maybe ''
+      });
     }
     else {
-      iPadT = percentPx(parentWd, wgtPadding[0]); // top
-      iPadR = percentPx(parentWd, wgtPadding[1]); // right
-      iPadB = percentPx(parentWd, wgtPadding[2]); // bottom
-      iPadL = percentPx(parentWd, wgtPadding[3]); // left
-      sPadding = iPadT + 'px ' + iPadR + 'px ' + iPadB + 'px ' + iPadL + 'px';
-      iBrdT = percentPx(parentWd, wgtBorder[0]);
-      iBrdR = percentPx(parentWd, wgtBorder[1]);
-      iBrdB = percentPx(parentWd, wgtBorder[2]);
-      iBrdL = percentPx(parentWd, wgtBorder[3]);
-      sBorderWd = iBrdT + 'px ' + iBrdR + 'px ' + iBrdB + 'px ' + iBrdL + 'px';
-      iMrgT = percentPx(parentWd, wgtMargin[0],true);
-      iMrgR = percentPx(parentWd, wgtMargin[1],true);
-      iMrgB = percentPx(parentWd, wgtMargin[2],true);
-      iMrgL = percentPx(parentWd, wgtMargin[3],true);
-      sMargin = iMrgT + 'px ' + iMrgR + 'px ' + iMrgB + 'px ' + iMrgL + 'px';
+      wgtPadding.forEach( function(item,idx) {
+        var iTmp = percentPx2(parentWd,item,false,true);
+        style0['padding'+direct_list_[idx]] = (iTmp===null?'':iTmp+'px');
+        bPad0[idx] = iTmp || 0;
+      });
+      
+      wgtBorder.forEach( function(item,idx) {
+        var iTmp = percentPx2(parentWd,item,true,true);
+        style0['border'+direct_list_[idx]+'Width'] = (iTmp===null?'':iTmp+'px');
+        bBrd0[idx] = iTmp || 0;
+      });
+      
+      wgtMargin.forEach( function(item,idx) {
+        var iTmp = percentPx2(parentWd,item,false,false);
+        style0['margin'+direct_list_[idx]] = (iTmp===null?'':iTmp+'px');
+        bMrg0[idx] = iTmp || 0;
+      });
     }
     
     var currWdgt = this.widget, gui = this.$gui, ownerObj = null;
     var minWd = this.state.minWidth, maxWd = this.state.maxWidth;
     var minHi = this.state.minHeight, maxHi = this.state.maxHeight;
     var thisWd = this.state.width, thisHi = this.state.height;
-    var cssWd = null, wdAuto = (typeof thisWd != 'number')?true:(thisWd>=1?false:parentWdAuto);
-    var cssHi = null, hiAuto = (typeof thisHi != 'number')?true:(thisHi>=1?false:parentHiAuto);
+    var cssWd = null, wdAuto = (typeof thisWd != 'number')?true:(thisWd>=1||thisWd==0?false:parentWdAuto);
+    var cssHi = null, hiAuto = (typeof thisHi != 'number')?true:(thisHi>=1||thisWd==0?false:parentHiAuto);
     var wdChanged = false, hiChanged = false;
     if (!wdAuto) {
       var wd = null;
       if (thisWd < 0) { // negative percent
-        var ownerWdgt = currWdgt && currWdgt.parent;
-        ownerObj = ownerWdgt && ownerWdgt.component;
+        ownerObj = this.parentOf(true);
         if (ownerObj) {
           var iSpared = ownerObj.$gui.sparedX;
           if (typeof iSpared == 'number') wd = iSpared * (0 - thisWd);
         }
         else ownerObj = undefined;
       }
-      else wd = percentPx(parentWd,thisWd);
+      else wd = percentPx(parentWd,thisWd,true);
       
       if (typeof wd != 'number')
         wdAuto = true;  // cssWd = null;  // wdChanged = false
@@ -7918,7 +8251,7 @@ class TWidget_ {
         if (minWd && wd < minWd) wd = minWd;
         if (maxWd && wd > maxWd) wd = maxWd;
         // cssWd = wd;
-        cssWd = wd - iPadL - iPadR - iBrdL - iBrdR;
+        cssWd = wd - bPad0[3] - bPad0[1] - bBrd0[3] - bBrd0[1];
         if (cssWd < 0)
           cssWd = null; // wdChanged = false
         else if (gui.cssWidth !== cssWd)
@@ -7928,35 +8261,33 @@ class TWidget_ {
     if (!hiAuto) {
       var hi = null;
       if (thisHi < 0) { // negative percent
-        if (ownerObj === null) {
-          var ownerWdgt = currWdgt && currWdgt.parent;
-          ownerObj = ownerWdgt && ownerWdgt.component;
-        }
+        if (ownerObj === null)
+          ownerObj = this.parentOf(true);
         if (ownerObj) {
           var iSpared = ownerObj.$gui.sparedY;
           if (typeof iSpared == 'number') hi = iSpared * (0 - thisHi);
         }
         else ownerObj = undefined;
       }
-      else hi = percentPx(parentHi,thisHi);
+      else hi = percentPx(parentHi,thisHi,true);
       if (typeof hi != 'number')
         hiAuto = true;  // cssHi = null;  // hiChanged = false
       else {
         if (minHi && hi < minHi) hi = minHi;
         if (maxHi && hi > maxHi) hi = maxHi;
         // cssHi = hi;
-        cssHi = hi - iPadT - iPadB - iBrdT - iBrdB;
+        cssHi = hi - bPad0[0] - bPad0[2] - bBrd0[0] - bBrd0[2];
         if (cssHi < 0)
           cssHi = null; // hiChanged = false
         else if (gui.cssHeight !== cssHi)
           hiChanged = true;
       }
     }  // else, take turning to auto as no resizing
-    if (minWd) minWd = Math.max(0,minWd - iPadL - iPadR - iBrdL - iBrdR);
-    if (maxWd) maxWd = Math.max(0,maxWd - iPadL - iPadR - iBrdL - iBrdR);
-    if (minHi) minHi = Math.max(0,minHi - iPadT - iPadB - iBrdT - iBrdB);
-    if (maxHi) maxHi = Math.max(0,maxHi - iPadT - iPadB - iBrdT - iBrdB);
-
+    if (minWd) minWd = Math.max(0,minWd - bPad0[3] - bPad0[1] - bBrd0[3] - bBrd0[1]);
+    if (maxWd) maxWd = Math.max(0,maxWd - bPad0[3] - bPad0[1] - bBrd0[3] - bBrd0[1]);
+    if (minHi) minHi = Math.max(0,minHi - bPad0[0] - bPad0[2] - bBrd0[0] - bBrd0[2]);
+    if (maxHi) maxHi = Math.max(0,maxHi - bPad0[0] - bPad0[2] - bBrd0[0] - bBrd0[2]);
+    
     gui.cssWidth = cssWd;   // null for 'auto'
     gui.cssHeight = cssHi;
     
@@ -7987,18 +8318,16 @@ class TWidget_ {
       }
     }
     
-    var dStyle = Object.assign({}, this.state.style, {
-      margin: sMargin, padding: sPadding, borderWidth: sBorderWd
-    }); // copy state.style for shallowEqual() always correct
+    var dStyle = Object.assign({}, this.state.style, style0); // copy state.style for shallowEqual() always correct
     if (typeof iLeft != 'number') delete dStyle.left; // as 'auto'
     else dStyle.left = iLeft + 'px';
     if (typeof iTop != 'number') delete dStyle.top;
     else dStyle.top = iTop + 'px';
     
     if (wdAuto) delete dStyle.width;      // as 'auto'
-    else dStyle.width = (cssWd + iPadL + iPadR + iBrdL + iBrdR) + 'px'; // box-sizing:border-box
+    else dStyle.width = (cssWd + bPad0[3] + bPad0[1] + bBrd0[3] + bBrd0[1]) + 'px'; // box-sizing:border-box
     if (hiAuto) delete dStyle.height;
-    else dStyle.height = (cssHi + iPadT + iPadB + iBrdT + iBrdB) + 'px';
+    else dStyle.height = (cssHi + bPad0[0] + bPad0[2] + bBrd0[0] + bBrd0[2]) + 'px';
     
     if (minWd) dStyle.minWidth = minWd + 'px';
     else delete dStyle.minWidth;
@@ -8021,9 +8350,13 @@ class TWidget_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
     var bChild = this.prepareState();
-    var props = setupRenderProp_(this);
-    return reactCreate_(this.state['tagName.'], props, bChild);
+    var props = setupRenderProp_(this), insEle = this.$gui.insertEle;
+    if (insEle) bChild = middleClone_(insEle,bChild);
+    return reactCreate_(sTag, props, bChild);
   }
 }
 
@@ -8051,7 +8384,7 @@ function nodesDualFn_(value,oldValue) {
         bNewKey.unshift(sKey);
         bNewEle.unshift(ele);
       }
-      else if (React.isValidElement(ele)) {
+      else if (reactIsValid_(ele)) {
         if (ele.props['keyid.'] !== sKey)
           ele = item[1] = reactClone_(ele,{key:sKey,'keyid.':sKey});
         bNewKey.unshift(sKey);
@@ -8165,6 +8498,12 @@ class TBodyPanel_ extends TWidget_ {
     
     super.componentWillUnmount();
   }
+  
+  render() {
+    if (this.widget !== topmostWidget_)
+      console.log('warning: BodyPanel only can be topmost widget.');
+    return super.render();
+  }
 }
 
 T.BodyPanel_ = TBodyPanel_;
@@ -8194,10 +8533,6 @@ class TPanel_ extends TWidget_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    if (this.widget && this.widget.parent === topmostWidget_) { // direct under W.body
-      if ((this.props.left || 0) > 0 || (this.props.top || 0) > 0)
-        this.duals.style = Object.assign({},this.props.style,{position:'absolute'});
-    }
     this.defineDual('nodes',nodesDualFn_,[]);
     return dState;
   }
@@ -8208,6 +8543,12 @@ class TPanel_ extends TWidget_ {
   
   isReverse() {
     return hasClass_(this.props.className + ' ' + this.state.klass, ['reverse-row', 'reverse-col']);
+  }
+  
+  render() {
+    if (!this.state['tagName.'])
+      console.log('warning: Panel can not be virtual widget.');
+    return super.render();
   }
 }
 
@@ -8238,7 +8579,7 @@ class TUnit_ extends TWidget_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    if (this.widget && this.widget.parent === topmostWidget_) // direct under W.body
+    if (isUnderBody_(this)) // direct under W.body
       this.duals.style = Object.assign({},this.props.style,{position:'absolute'});
     return dState;
   }
@@ -8276,16 +8617,12 @@ class TSplitDiv_ extends TUnit_ {
     var dState = super.getInitialState();
     
     this.$gui.comps = []; // force not using child element
-    var owner = null, wdgt = this.widget;
-    if (wdgt) {
-      owner = wdgt.parent;
-      owner = owner && owner.component;
-    }
-    
+    var owner = this.parentOf(true), wdgt = this.widget;
     if (!owner) {
       utils.instantShow('error: no owner widget for SplitDiv');
       return dState;
     }
+    
     if (!hasClass_(owner.props.className, 'rewgt-panel')) { // warning: can not add SplitDiv in topmost panel
       utils.instantShow('error: owner of widget (' + wdgt.getPath() + ') is not rewgt-panel');
       return dState;
@@ -8427,11 +8764,8 @@ class TSplitDiv_ extends TUnit_ {
     
     function whenMouseMove(event) {
       if (!gui.inDrag) {
-        var owner = self.widget;
-        owner = owner && owner.parent;
-        var ownerObj = owner && owner.component;
-        if (!ownerObj) return;
-        if (!ownerObj.$gui.isPanel) return; // SplitDiv only worked in panel
+        var ownerObj = self.parentOf(true);
+        if (!ownerObj || !ownerObj.$gui.isPanel) return; // SplitDiv only worked in panel
         if (Array.isArray(ownerObj.props.sizes)) return; // SplitDiv can not used under GridPanel
         
         var moved = false, inRow = gui.inRow;
@@ -8458,8 +8792,8 @@ class TSplitDiv_ extends TUnit_ {
             prevObj = prevObj.prevSibling();
           }
           
-          var owner2_, ownerObj2_;
-          if (!gui.inDrag && !self.nextSibling() && (owner2_ = owner.parent) && (ownerObj2_ = owner2_.component)) {
+          var ownerObj2_;
+          if (!gui.inDrag && !self.nextSibling() && (ownerObj2_=ownerObj.parentOf(true))) {
             if (ownerObj.$gui.sparedTotal > 0.989 && ownerObj.$gui.sparedTotal <= 1.01) { // ownerObj2_.$gui.isPanel
               var wd = inRow ? ownerObj.state.width: ownerObj.state.height;
               var wdMin = inRow ? ownerObj.state.minWidth: ownerObj.state.minHeight;
@@ -8475,7 +8809,7 @@ class TSplitDiv_ extends TUnit_ {
               
               // maybe row-SplitDiv and col-SplitDiv is nested, check up level
               if (!gui.inDrag && typeof wd == 'number' && wd > 0 && ownerObj2_.$gui.sparedTotal > 0.989 && ownerObj2_.$gui.sparedTotal <= 1.01) {
-                var owner3_ = owner2_.parent, ownerObj3_ = owner3_ && owner3_.component;
+                var ownerObj3_ = ownerObj2_.parentOf(true);
                 if (ownerObj3_) { // ownerObj3_.$gui.isPanel
                   var wd = inRow ? ownerObj2_.state.width: ownerObj2_.state.height;
                   var wdMin = inRow ? ownerObj2_.state.minWidth: ownerObj2_.state.minHeight;
@@ -8557,6 +8891,7 @@ class TGridPanel_ extends TPanel_ {
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
+    // dProp['tagName.'] = 'div';  // default is 'div'
     dProp.sizes = [0.3, 0.3, -1];
     return dProp;
   }
@@ -8793,13 +9128,15 @@ class TGridPanel_ extends TPanel_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
-    var bChild = this.prepareState();
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
     
+    var bChild = this.prepareState();
     if (W.__design__)
       bChild.push(reactCreate_('div',{key:'$end',title:'end of GridPanel',style:{width:'100%',height:'10px',backgroundColor:'#eee'}}));
-    
-    var props = setupRenderProp_(this);
-    return reactCreate_('div', props, bChild);
+    var props = setupRenderProp_(this), insEle = this.$gui.insertEle;
+    if (insEle) bChild = middleClone_(insEle,bChild);
+    return reactCreate_(sTag, props, bChild);
   }
 }
 
@@ -8810,12 +9147,13 @@ class TTableRow_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'TableRow',desc);
     this._silentProp.push('isTableRow.');  // _statedProp no change
-    this._defaultProp.height = undefined;  // undefined stand for not a number, not save all none-number // careful: NaN === NaN is false
+    this._defaultProp.height = null;
   }
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
     // dProp['childInline.'] = false;  // default is false
+    dProp['tagName.'] = 'tr';
     dProp['isTableRow.'] = true;       // only TableRow is allowed under TablePanel
     // dProp.className = 'rewgt-unit'; // default is 'rewgt-unit'
     dProp.height = null; // auto height, row width is fixed to 100%
@@ -8828,8 +9166,7 @@ class TTableRow_ extends TUnit_ {
     if (W.__design__) {
       var self = this;
       this.defineDual('childNumId', function(value,oldValue) {
-        var wdgt = self.widget, ownerObj = wdgt && wdgt.parent;
-        ownerObj = ownerObj && ownerObj.component;
+        var ownerObj = self.parentOf(true);
         if (ownerObj) { // ownerObj is TablePanel
           setTimeout( function() {
             ownerObj.reRender(); // fire refresh (tail row updated)
@@ -8845,6 +9182,9 @@ class TTableRow_ extends TUnit_ {
     var gui = this.$gui, oldWd = gui.cssWidth, oldHi = gui.cssHeight;
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
+    
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
     
     var cssWd = gui.cssWidth = this.state.parentWidth; // fixed to parent size, child will read it
     var wdAuto = (typeof cssWd != 'number') || cssWd < 0;
@@ -8941,8 +9281,9 @@ class TTableRow_ extends TUnit_ {
       dStyle.height = cssHi + 'px'; // cssHi is cssHeight (in 'px')
     else delete dStyle.height;
     
-    var props = setupRenderProp_(this,dStyle);
-    return reactCreate_('tr',props,bChild);
+    var props = setupRenderProp_(this,dStyle), insEle = gui.insertEle;
+    if (insEle) bChild = middleClone_(insEle,bChild);
+    return reactCreate_(sTag,props,bChild);
   }
 }
 
@@ -8952,11 +9293,12 @@ T.TableRow  = new TTableRow_();
 class TTablePanel_ extends TPanel_ {
   constructor(name,desc) {
     super(name || 'TablePanel',desc);
-    this._defaultProp.height = undefined;
+    this._defaultProp.height = null;
   }
   
   getDefaultProps() {
     var dProp = super.getDefaultProps();
+    dProp['tagName.'] = 'table';
     dProp.className = 'rewgt-unit rewgt-table';
     dProp.height = null;  // auto height
     return dProp;
@@ -8977,6 +9319,9 @@ class TTablePanel_ extends TPanel_ {
     var gui = this.$gui, oldWd = gui.cssWidth, oldHi = gui.cssHeight; // save old value to judge changing
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
+    
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
     
     var bChild = this.prepareState();
     
@@ -9037,7 +9382,7 @@ class TTablePanel_ extends TPanel_ {
     
     var tBody = reactCreate_('tbody', null, bChild);
     var props = setupRenderProp_(this);
-    return reactCreate_('table', props, tBody);
+    return reactCreate_(sTag, props, tBody); // ignore gui.insertEle
   }
 }
 
@@ -9050,15 +9395,16 @@ T.TablePanel  = new TTablePanel_();
 class TDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'Div',desc);
-    this._defaultProp.height = undefined;
+    this._defaultProp.height = null;
     this._defaultProp.minHeight = 20;
     this._htmlText = true;
   }
   
   getDefaultProps() {
     var props = super.getDefaultProps();
+    // props['tagName.'] = 'div';  // default is 'div'
     // props.className = 'rewgt-unit'; // default is 'rewgt-unit'
-    props.width = 0.9999;
+    // props.width = 0.9999;  // default is 0.9999
     props.height = null;
     props.minHeight = 20;
     // props['childInline.'] = false;  // default is false
@@ -9080,19 +9426,70 @@ class TDiv_ extends TUnit_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
-    var bChild = this.prepareState();
-    var props = setupRenderProp_(this);
-    return reactCreate_(this.state['tagName.'], props, bChild.length?bChild:this.state['html.']);
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
+    var bChild = this.prepareState(), hasChild = bChild.length;
+    var props = setupRenderProp_(this), insEle = this.$gui.insertEle;
+    if (insEle) { bChild = middleClone_(insEle,bChild); hasChild = true; }
+    return reactCreate_(sTag, props, hasChild?bChild:this.state['html.']);
   }
 }
 
 T.Div_ = TDiv_;
 T.Div  = new TDiv_();
 
+class TDiv2_ extends TDiv_ {
+  constructor(name,desc) {
+    super(name || 'Div2',desc);
+    delete this._defaultProp.minHeight;
+    this._defaultProp.width = null;
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    delete props.minHeight;
+    // props.className = 'rewgt-unit'; // default is 'rewgt-unit'
+    props.width = null;  // height=null, minWidth=0, minHeight=0
+    props['childInline.'] = true;
+    return props;
+  }
+}
+
+T.Div2_ = TDiv2_;
+T.Div2  = new TDiv2_();
+
+var virtualdiv_margin_ = [null,null,null,null];
+
+class TVirtualDiv_ extends TDiv2_ {
+  constructor(name,desc) {
+    super(name || 'VirtualDiv',desc);
+    delete this._defaultProp.minWidth;
+    delete this._defaultProp.minHeight;
+    Object.assign(this._defaultProp, {
+      left:null, top:null, margin:virtualdiv_margin_.slice(0),
+      padding:virtualdiv_margin_.slice(0), borderWidth:virtualdiv_margin_.slice(0),
+    });
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    delete props.minWidth;
+    delete props.minHeight;
+    return Object.assign(props, { 'tagName.':'',
+      left:null, top:null, margin:virtualdiv_margin_.slice(0),
+      padding:virtualdiv_margin_.slice(0), borderWidth:virtualdiv_margin_.slice(0),
+    });
+  }
+}
+
+T.VirtualDiv_ = TVirtualDiv_;
+T.VirtualDiv  = new TVirtualDiv_();
+
 class THiddenDiv_ extends TDiv_ {
   constructor(name,desc) {
     super(name || 'HiddenDiv',desc);
-    this._defaultProp.width = undefined;
+    this._defaultProp.width = null;
     delete this._defaultProp.minHeight;
   }
   
@@ -9113,10 +9510,11 @@ class THiddenDiv_ extends TDiv_ {
 T.HiddenDiv_ = THiddenDiv_;
 T.HiddenDiv  = new THiddenDiv_();
 
-function simpleExtends(TBase,sName) {
+function simpleExtends(TBase,sName,noHtml) {
   class T extends TBase {
     constructor(name,desc) {
       super(name || sName,desc);
+      if (noHtml) this._htmlText = false;
     }
     
     getDefaultProps() {
@@ -9149,8 +9547,8 @@ var TPara_margin_ = [6, 0, 6, 0];
 class TP_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'P',desc);
-    this._defaultProp.width = undefined;
-    this._defaultProp.height = undefined;
+    this._defaultProp.width = null;
+    this._defaultProp.height = null;
     this._defaultProp.margin = TPara_margin_.slice(0);
     this._htmlText = true;
   }
@@ -9158,7 +9556,7 @@ class TP_ extends TUnit_ {
   getDefaultProps() {
     var props = super.getDefaultProps();
     return Object.assign(props, {  // default props.className is 'rewgt-unit'
-      width:null, height:null,
+      width:null, height:null,     // minWidth=0, minHeight=0
       margin: TPara_margin_.slice(0),
       'childInline.':true, 'tagName.':'p',
     });
@@ -9179,15 +9577,19 @@ class TP_ extends TUnit_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
-    var bChild = this.prepareState();
-    var props = setupRenderProp_(this);
-    return reactCreate_(this.state['tagName.'], props, bChild.length?bChild:this.state['html.']);
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
+    var bChild = this.prepareState(), hasChild = bChild.length;
+    var props = setupRenderProp_(this), insEle = this.$gui.insertEle;
+    if (insEle) { bChild = middleClone_(insEle,bChild); hasChild = true; }
+    return reactCreate_(sTag, props, hasChild?bChild:this.state['html.']);
   }
 }
 
 T.P_ = TP_;
 T.P  = new TP_();
-var P__ = createClass_(T.P._extend());
+var P__ = T.P._createClass(null);
 
 class TNoscript_ extends TP_ {
   constructor(name,desc) {
@@ -9198,14 +9600,18 @@ class TNoscript_ extends TP_ {
   getDefaultProps() {
     var props = super.getDefaultProps();
     props['tagName.'] = 'noscript';
-    // props.width = null; props.height = null;  // fix to auto width and height
     delete props.margin;  // default not pass props.margin
     return props;
   }
   
   render() {
     syncProps_(this);  // should call syncProps since duals.attr in using
-    return reactCreate_(this.state['tagName.']); // ignore props and children
+    if (this.hideThis) return null;
+    
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
+    return reactCreate_(sTag); // ignore props and children
   }
 }
 
@@ -9354,26 +9760,23 @@ T.Table  = new TTable_();
 
 T.Caption_ = simpleExtends(TP_,'Caption');
 T.Caption  = new T.Caption_();
-T.Col_ = simpleExtends(TP_,'Col');
+
+T.Col_ = simpleExtends(TVirtualDiv_,'Col',true);
 T.Col  = new T.Col_();
-T.Colgroup_ = simpleExtends(TP_,'Colgroup');
+T.Colgroup_ = simpleExtends(TVirtualDiv_,'Colgroup',true);
 T.Colgroup  = new T.Colgroup_();
-T.Td_ = simpleExtends(TP_,'Td');
+T.Td_ = simpleExtends(TVirtualDiv_,'Td');
 T.Td  = new T.Td_();
 
-var TBody_margin_ = [0,0,0,0];
-
-class TTbody_ extends TP_ {
+class TTbody_ extends TVirtualDiv_ {
   constructor(name,desc) {
     super(name || 'Tbody',desc);
-    this._defaultProp.margin = TBody_margin_.slice(0);
     this._htmlText = false;
   }
   
   getDefaultProps() {
     var props = super.getDefaultProps();
     props['tagName.'] = 'tbody';
-    props.margin = TBody_margin_.slice(0);
     return props;
   }
   
@@ -9382,12 +9785,15 @@ class TTbody_ extends TP_ {
       syncProps_(this);
       if (this.hideThis) return null;   // as <noscript>
       
+      var sTag = this.state['tagName.'];
+      if (!sTag) return getOnlyChild_(this);
+
       var bChild = this.prepareState();
       var tailRow = reactCreate_('tr',{key:'$end',title:'end of Tbody',style:{height:'10px'}},reactCreate_('td'));
       bChild.push(tailRow);
       
       var props = setupRenderProp_(this);
-      return reactCreate_(this.state['tagName.'],props,bChild);
+      return reactCreate_(sTag,props,bChild); // ignore gui.insertEle
     }
     else return super.render();
   }
@@ -9396,48 +9802,14 @@ class TTbody_ extends TP_ {
 T.Tbody_ = TTbody_;
 T.Tbody  = new TTbody_();
 
-T.Thead_ = simpleExtends(TP_,'Thead');
+T.Thead_ = simpleExtends(TVirtualDiv_,'Thead',true);
 T.Thead  = new T.Thead_();
-T.Tfoot_ = simpleExtends(TP_,'Tfoot');
+T.Tfoot_ = simpleExtends(TVirtualDiv_,'Tfoot',true);
 T.Tfoot  = new T.Tfoot_();
-
-var ThTr_margin_ = [0,0,0,0];
-
-class TTh_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Th',desc);
-    this._defaultProp.margin = ThTr_margin_.slice(0);
-    this._htmlText = false;
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'th';
-    props.margin = ThTr_margin_.slice(0);
-    return props;
-  }
-}
-
-T.Th_ = TTh_;
-T.Th  = new TTh_();
-
-class TTr_ extends TP_ {
-  constructor(name,desc) {
-    super(name || 'Tr',desc);
-    this._defaultProp.margin = ThTr_margin_.slice(0);
-    this._htmlText = false;
-  }
-  
-  getDefaultProps() {
-    var props = super.getDefaultProps();
-    props['tagName.'] = 'tr';
-    props.margin = ThTr_margin_.slice(0);
-    return props;
-  }
-}
-
-T.Tr_ = TTr_;
-T.Tr  = new TTr_();
+T.Th_ = simpleExtends(TVirtualDiv_,'Th',true);
+T.Th  = new T.Th_();
+T.Tr_ = simpleExtends(TVirtualDiv_,'Tr',true);
+T.Tr  = new T.Tr_();
 
 T.Hgroup_ = simpleExtends(TP_,'Hgroup');
 T.Hgroup  = new T.Hgroup_();
@@ -9455,7 +9827,7 @@ T.H5  = new T.H5_();
 T.H6_ = simpleExtends(TP_,'H6');
 T.H6  = new T.H6_();
 
-var THr_border_width_ = [1,1,1,1];
+var THr_border_width_ = [1,0,0,0];
 
 class THr_ extends TP_ {
   constructor(name,desc) {
@@ -9491,7 +9863,7 @@ class TSpan_ extends TWidget_ {
     
     this._statedProp = [];
     this._silentProp = ['className','hookTo.','keyid.','childInline.','tagName.'];
-    this._defaultProp = {width:undefined, height:undefined}; // 'html.' default is not passed, suggest not use width/height, but if used also OK
+    this._defaultProp = {width:undefined, height:undefined}; // 'html.' default is not passed, suggest not use width/height, but if used also OK // undefined means remove all none-number when saving
     this._htmlText = true;  // use 'html.'
   }
   
@@ -9532,7 +9904,6 @@ class TSpan_ extends TWidget_ {
     gui.forExpr = false; gui.hasIdSetter = false;
     
     var currEvSet = {}, evSet_=this.$eventset || [{},{}], evSet=evSet_[0], sysEvSet=evSet_[1];
-    delete this.$eventset; // $eventset is passed in _extend()
     
     var dualIdSetter = null;
     var b = Object.keys(this.props);
@@ -9587,7 +9958,7 @@ class TSpan_ extends TWidget_ {
             }
             else {
               if (item == 'children') {
-                if (this.props.hasOwnProperty('for.index')) { // $children only used under forExpr
+                if (hasOwn_.call(this.props,'for.index')) { // $children only used under forExpr
                   gui.isChildExpr = true;
                   gui.children2 = this.props.children;
                 }
@@ -9605,14 +9976,12 @@ class TSpan_ extends TWidget_ {
             continue;
           }
           
-          item = item.slice(1);
-          if (item == 'id__') { // pass setter by props.$id__
+          var item2 = item.slice(1);
+          if (item2 == 'id__') { // pass setter by props.$id__
             dualIdSetter = itemValue;  // will bind this in defineDual('id__')
             gui.hasIdSetter = true;
           }
-          else if (!sysEvSet[item])
-            currEvSet[item] = itemValue.bind(this);
-          // else, ignore
+          else this[item] = currEvSet[item2] = itemValue.bind(this);
         }
         // else ignore  // $XX only can be string or function, ignore others
       }
@@ -9625,31 +9994,7 @@ class TSpan_ extends TWidget_ {
     gui.flowFlag = flowFlag;
     gui.dataset2 = dataset.slice(0);
     
-    for (var sEvName in evSet) {
-      eventset[sEvName] = this['$' + sEvName];
-    }
-    for (var sEvName in currEvSet) {
-      eventset[sEvName] = currEvSet[sEvName];
-    }
-    for (var sEvName in sysEvSet) {
-      eventset[sEvName] = this['$$' + sEvName];
-    }
-    
-    // step 3: prepare dState
-    Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
-    if (W.__design__) gui.className = addClass_(gui.className,'rewgt-inline'); // gui.className is fixed, not changed by prop.className
-    var dStyle = Object.assign({},this.props.style);
-    var dState = { id__:0, childNumId:0, duals:[],
-      'tagName.': this.props['tagName.'],
-      exprAttrs: exprAttrs.slice(0),
-      klass:'', style:{}, 'html.':null,
-    }; // state.duals = [[attr,newValue], ...]
-    if (W.__design__) {
-      var d = template._getGroupOpt(this);
-      dState['data-group.opt'] = d.type + '/' + d.editable; // no props['data-group.opt'], not in $gui.dataset
-    }
-    
-    // step 4: hook parent widget
+    // step 3: hook parent widget
     var keyid = this.props['keyid.'];
     if (keyid) {
       var keyTp = typeof keyid;
@@ -9667,7 +10012,42 @@ class TSpan_ extends TWidget_ {
       gui.keyid = keyid;
     }
     
-    // step 5: regist duals
+    // step 4: setup eventset
+    var virtualKey = this.props['data-rewgt-owner'];
+    if (virtualKey) {
+      var ownerComp, evtset2 = gui.eventset2 = {};
+      if (owner && (ownerComp=owner.component)) {
+        var b = Object.keys(ownerComp.$gui.eventset);
+        for (var i=0,item; item=b[i]; i++) {
+          eventset[item] = wrapCompEvt_(this,item,virtualKey);
+          evtset2[item] = true;
+        }
+      }
+    }
+    
+    var wrapKeys = Object.assign({},evSet,currEvSet);
+    for (var sEvName in wrapKeys) {
+      eventset[sEvName] = wrapCompEvt_(this,sEvName,virtualKey);
+    }
+    for (var sEvName in sysEvSet) {
+      eventset[sEvName] = this['$$'+sEvName]; // maybe overwrite
+    }
+    
+    // step 5: prepare dState
+    Object.defineProperty(this,'$gui',{enumerable:false,configurable:false,writable:false,value:gui});
+    if (W.__design__) gui.className = addClass_(gui.className,'rewgt-inline'); // gui.className is fixed, not changed by prop.className
+    var dStyle = Object.assign({},this.props.style);
+    var dState = { id__:0, childNumId:0, duals:[],
+      'tagName.': this.props['tagName.'],
+      exprAttrs: exprAttrs.slice(0),
+      klass:'', style:{}, 'html.':null,
+    }; // state.duals = [[attr,newValue], ...]
+    if (W.__design__) {
+      var d = template._getGroupOpt(this);
+      dState['data-group.opt'] = d.type + '/' + d.editable; // no props['data-group.opt'], not in $gui.dataset
+    }
+    
+    // step 6: regist duals
     gui.compIdx = {}; gui.comps = children2Arr_(this.props.children);
     
     Object.defineProperty(this.duals,'keyid', { enumerable:true, configurable:true,
@@ -9719,8 +10099,10 @@ class TSpan_ extends TWidget_ {
       var compIdx = gui.compIdx, bComp = gui.comps, needClear = false;
       bComp.forEach( function(child,iPos) {
         if (typeof child == 'string') {
-          if (iPos == 0 && bComp.length == 1 && thisObj.duals.hasOwnProperty('html.')) {
-            thisObj.state['html.'] = child;
+          if (iPos == 0 && bComp.length == 1 && hasOwn_.call(thisObj.duals,'html.')) {
+            setTimeout( function() {
+              thisObj.duals['html.'] = child;
+            },0);
             needClear = true;
             return;
           }
@@ -9819,15 +10201,34 @@ class TSpan_ extends TWidget_ {
     syncProps_(this);
     if (this.hideThis) return reactCreate_('span',displayNoneProp_);
     
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
     var props = setupRenderProp_(this);
-    var b = this.$gui.comps, children = b.length?b:this.state['html.'];
-    return reactCreate_(this.state['tagName.'], props, children);
+    var b = this.$gui.comps, hasChild = b.length, insEle = this.$gui.insertEle;
+    if (insEle) { b = middleClone_(insEle,b); hasChild = true; }
+    return reactCreate_(sTag, props, hasChild?b:this.state['html.']);
   }
 }
 
 T.Span_ = TSpan_;
 T.Span  = new TSpan_();
-var Span__ = createClass_(T.Span._extend());
+var Span__ = T.Span._createClass(null);
+
+class TVirtualSpan_ extends TSpan_ {
+  constructor(name,desc) {
+    super(name || 'VirtualSpan',desc);
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    props['tagName.'] = '';
+    return props;
+  }
+}
+
+T.VirtualSpan_ = TVirtualSpan_;
+T.VirtualSpan  = new TVirtualSpan_();
 
 class THiddenSpan_ extends TSpan_ {
   constructor(name,desc) {
@@ -9889,7 +10290,7 @@ T.Abbr  = new T.Abbr_();
 function addStepFunc_(comp) {
   comp.stepPlay = function(fSpeed) {      // not use fSpeed
     if (this.isHooked) {
-      var node = findDomNode_(this);
+      var node = this.getHtmlNode();
       if (node && node.readyState >= 2) { // 2: HAVE_CURRENT_DATA
         node.play();
         return true;
@@ -9900,7 +10301,7 @@ function addStepFunc_(comp) {
   
   comp.stepPause = function(sReason) {    // sReason: JUMP_PAGE,NEXT_PAGE,PRE_STEP,POST_STEP
     if (this.isHooked) {
-      var node = findDomNode_(this);
+      var node = this.getHtmlNode();
       if (node) {
         if (!node.paused)
           node.pause();
@@ -9912,7 +10313,7 @@ function addStepFunc_(comp) {
   
   comp.stepIsDone = function() {
     if (!this.isHooked) return true;
-    var node = findDomNode_(this);
+    var node = this.getHtmlNode();
     return !node || node.readyState < 2 || node.paused;
   };
 }
@@ -9967,21 +10368,6 @@ T.Wbr  = new T.Wbr_();
 T.Button_ = simpleExtends(TSpan_,'Button');
 T.Button  = new T.Button_();
 
-function renderWithSync(self) {
-  syncProps_(self);
-  if (self.hideThis) return reactCreate_('span',displayNoneProp_);
-  
-  var props = setupRenderProp_(self);
-  if (self.$gui.syncValue) {
-    var node = findDomNode_(self);
-    if (node && node.value !== self.state.value)
-      node.value = self.state.value; // change directly, avoid re-render
-  }
-  
-  var b = self.$gui.comps, children = b.length?b:self.state['html.'];
-  return reactCreate_(self.state['tagName.'], props, children);
-}
-
 class TTextarea_ extends TSpan_ {
   constructor(name,desc) {
     super(name || 'Textarea',desc);
@@ -10005,13 +10391,9 @@ class TTextarea_ extends TSpan_ {
   getInitialState() {
     var dState = super.getInitialState();
     
-    if (this.props.defaultValue !== undefined)
-      this.$gui.tagAttrs.push('defaultValue');
-    // this.$gui.syncValue = false;  // default is false
-    if (this.props.value === undefined) {
-      this.defineDual('value');
-      this.$gui.syncValue = true;
-    }
+    var initValue = this.props.value !== undefined?
+      (this.props.value || '') : (this.props.defaultValue || '');
+    this.defineDual('value',null,initValue);
     
     return dState;
   }
@@ -10019,10 +10401,6 @@ class TTextarea_ extends TSpan_ {
   $$onChange(event) {
     this.duals.value = event.target.value;
     if (this.$onChange) this.$onChange(event);
-  }
-  
-  render() {
-    return renderWithSync(this);
   }
 }
 
@@ -10151,24 +10529,17 @@ class TInput_ extends TSpan_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    if (this.props.defaultValue !== undefined)
-      this.$gui.tagAttrs.push('defaultValue');    // add render: defaultValue
-    if (this.props.defaultChecked !== undefined)
-      this.$gui.tagAttrs.push('defaultChecked');  // add render: defaultChecked
     
     var sType = this.props.type;
-    // this.$gui.syncValue = false; // default is false
     if (sType === 'checkbox' || sType === 'radio') {
-      if (this.props.checked === undefined) {
-        this.defineDual('checked'); // force regist duals.checked
-        this.$gui.tagAttrs.push('checked');
-      }
+      var initChecked = this.props.checked !== undefined ?
+        boolToStr_(this.props.checked) : boolToStr_(this.props.defaultChecked);
+      this.defineDual('checked',null,initChecked);
     }
     else {
-      if (this.props.value === undefined) {
-        this.defineDual('value');   // force regist duals.value
-        this.$gui.syncValue = true;
-      }
+      var initValue = this.props.value !== undefined ?
+        (this.props.value || '') : (this.props.defaultValue || '');
+      this.defineDual('value',null,initValue);
     }
     
     return dState;
@@ -10180,10 +10551,6 @@ class TInput_ extends TSpan_ {
       this.duals.checked = event.target.checked;
     else this.duals.value = event.target.value;
     if (this.$onChange) this.$onChange(event);
-  }
-  
-  render() {
-    return renderWithSync(this);
   }
 }
 
@@ -10244,10 +10611,9 @@ class TSelect_ extends TSpan_ {
   getInitialState() {
     var dState = super.getInitialState();
     
-    if (this.props.defaultValue !== undefined)
-      this.$gui.tagAttrs.push('defaultValue');
-    if (this.props.value === undefined)
-      this.defineDual('value');  // force regist duals.value
+    var initValue = this.props.value !== undefined?
+      (this.props.value || '') : (this.props.defaultValue || '');
+    this.defineDual('value',null,initValue);
     
     return dState;
   }
@@ -10369,12 +10735,13 @@ T.Rt  = new T.Rt_();
 // NavXXX, GroundXXX, OptXXX, RefXXX
 //-----------------------------------
 function navSetChecked_(comp,checkedId,callback) {
-  if (checkedId) {
-    var gui = comp.$gui, navKey = gui.navSubkey;
+  var gui = comp.$gui;
+  if (checkedId && gui.compState) {
+    var navKey = gui.navSubkey;
     var oldId = comp.state.checkedId;
     if (gui.navItems[checkedId]) { // is valid checkedId
       if (!disableSwitch(oldId,checkedId)) {
-        comp.state.checkedId = checkedId;  // set immediately
+        setAndTrigger(oldId,checkedId); // set immediately
         comp.reRender(callback);   // auto choose checkedId GroundXX to render out
         return;
       }
@@ -10383,13 +10750,13 @@ function navSetChecked_(comp,checkedId,callback) {
       var widget = comp.widget, subNav = widget && widget[navKey];
       subNav = subNav && subNav.component;
       if (subNav && subNav.props['isNavigator.'] && !disableSwitch(oldId,checkedId)) {
-        comp.state.checkedId = checkedId; // set immediately, this level is OK whereas sub level may failed
+        setAndTrigger(oldId,checkedId); // set immediately, this level is OK whereas sub level may failed
         subNav.fireChecked(checkedId,callback);
         return;
       }
     }
     
-    // set checkedId even if switch ground failed
+    // set checkedId even if switch ground failed, but not trigger duals.checkedId
     comp.state.checkedId = checkedId; // set immediately
   }
   
@@ -10409,6 +10776,16 @@ function navSetChecked_(comp,checkedId,callback) {
     }
     return false;
   }
+  
+  function setAndTrigger(sOld,sNew) {
+    comp.state.checkedId = sNew;
+    var bConn = gui.connectTo['checkedId'];
+    if (bConn && gui.compState >= 2) {
+      setTimeout( function() {
+        triggerConnTo_(bConn,sNew,sOld,'checkedId');
+      },0);
+    }
+  }
 }
 
 class TNavPanel_ extends TPanel_ {
@@ -10425,7 +10802,16 @@ class TNavPanel_ extends TPanel_ {
   
   getInitialState() {
     var dState = super.getInitialState();
+    
     dState.checkedId = '';
+    Object.defineProperty(this.duals,'checkedId', { enumerable:true, configurable:true,
+      get: (function() {
+        return this.state.checkedId;
+      }).bind(this),
+      set: function(value,oldValue) { // no need bind this
+        throw new Error('property (checkedId) is readonly');
+      },
+    });
     
     var gui = this.$gui;
     gui.navItems = {};
@@ -10572,6 +10958,9 @@ class TNavPanel_ extends TPanel_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
     var bChild = this.prepareState(); // bChild is copy of gui.comps
     
     if (W.__design__) {  // 'display:none' for none-active playground
@@ -10625,8 +11014,9 @@ class TNavPanel_ extends TPanel_ {
       }
     }
     
-    var props = setupRenderProp_(this);
-    return reactCreate_('div',props,bChild);
+    var props = setupRenderProp_(this), insEle = this.$gui.insertEle;
+    if (insEle) bChild = middleClone_(insEle,bChild);
+    return reactCreate_(sTag,props,bChild);
     
     function findInsPos(bChild,sKey) {
       for (var i=0,child; child=bChild[i]; i++) {
@@ -10644,7 +11034,7 @@ class TNavDiv_ extends TNavPanel_ {
   constructor(name,desc) {
     super(name || 'NavDiv',desc);
     // this._silentProp.push('isNavigator.'); // has defined in base class
-    this._defaultProp.height = undefined;
+    this._defaultProp.height = null;
     this._defaultProp.minHeight = 20;
   }
   
@@ -10666,9 +11056,10 @@ function designRenderGround(obj,iGroundId) {
   syncProps_(obj);
   if (obj.hideThis) return null;   // as <noscript>
   
-  var owner = obj.widget;
-  owner = owner && owner.parent;
-  var inNav = false, checkedId = undefined, ownerObj = owner && owner.component;
+  var sTag = obj.state['tagName.'];
+  if (!sTag) return getOnlyChild_(obj);
+  
+  var inNav = false, checkedId = undefined, ownerObj = obj.parentOf(true);
   if (ownerObj && ownerObj.props['isNavigator.']) {
     checkedId = ownerObj.state.checkedId || '';
     inNav = true;
@@ -10682,19 +11073,21 @@ function designRenderGround(obj,iGroundId) {
     else dStyle.display = 'none';  // hide it
   }
   // else, keep dStyle.display no changing
+  var hasChild = bChild.length, insEle = obj.$gui.insertEle;
+  if (insEle) { bChild = middleClone_(insEle,bChild); hasChild = true; }
   
-  if (!bChild.length && iGroundId == 2)
+  if (!hasChild && iGroundId == 2)
     bChild = obj.state['html.'] || null;
   
   var props = setupRenderProp_(obj,dStyle);
-  return reactCreate_('div',props,bChild);
+  return reactCreate_(sTag,props,bChild);
 }
 
 class TGroundPanel_ extends TPanel_ {
   constructor(name,desc) {
     super(name || 'GroundPanel',desc);
     this._silentProp.push('isPlayground.');
-    this._defaultProp.height = undefined;
+    this._defaultProp.height = null;
     this._defaultProp.minHeight = 20;
   }
   
@@ -10721,7 +11114,7 @@ class TGroundDiv_ extends TUnit_ {
   constructor(name,desc) {
     super(name || 'GroundDiv',desc);
     this._silentProp.push('isPlayground.');
-    this._defaultProp.height = undefined;
+    this._defaultProp.height = null;
     this._defaultProp.minHeight = 20;
     this._htmlText = true;
   }
@@ -10756,9 +11149,13 @@ class TGroundDiv_ extends TUnit_ {
       syncProps_(this);
       if (this.hideThis) return null;   // as <noscript>
       
-      var bChild = this.prepareState();
-      var props = setupRenderProp_(this);
-      return reactCreate_(this.state['tagName.'], props, bChild.length?bChild:this.state['html.']);
+      var sTag = this.state['tagName.'];
+      if (!sTag) return getOnlyChild_(this);
+      
+      var bChild = this.prepareState(), hasChild = bChild.length;
+      var props = setupRenderProp_(this), insEle = this.$gui.insertEle;
+      if (insEle) { bChild = middleClone_(insEle,bChild); hasChild = true; }
+      return reactCreate_(sTag, props, hasChild?bChild:this.state['html.']);
     }
   }
 }
@@ -10825,16 +11222,20 @@ function trySyncUncheck_(self,ownerObj) {
 }
 
 function setOptChecked_(self,callback,newOpt,isForce) {
-  function delayCallback(bTime) {
+  function delayCallback(bTime) { // called only has callback
     var iWait = bTime.shift();
     if (iWait) {
       setTimeout( function() {
         if (self.state['data-checked'])
           callback();
-        else delayCall(bTime);
+        else delayCallback(bTime);
       },iWait);
     }
     else callback();  // force callback
+  }
+  
+  if (self.state.disabled && !isForce) {
+    if (callback) callback();
   }
   
   var popOption = self.state.popOption;
@@ -10896,22 +11297,26 @@ function setOptChecked_(self,callback,newOpt,isForce) {
 }
 
 function defineOptDual_(self,state) {
-  state.isolated = false;
+  state.isolated = '';
   self.defineDual('isolated', function(value,oldValue) {
-    this.state.isolated = (value === 'false' || value === '0'? false: !!value);
+    this.state.isolated = boolToStr_(value);
   });
   
-  state.recheckable = false;
+  state.recheckable = '';
   self.defineDual('recheckable', function(value,oldValue) {
-    this.state.recheckable = (value === 'false' || value === '0'? false: !!value);
+    this.state.recheckable = boolToStr_(value);
+  });
+  
+  state.disabled = '';
+  self.defineDual('disabled', function(value,oldValue) {
+    this.state.disabled = boolToStr_(value);
   });
   
   self.defineDual('popOption');
   
   state['data-checked'] = '';
   self.defineDual('data-checked', function(value,oldValue) {
-    var sOld = oldValue === 'false' || oldValue === '0' || !oldValue ? '' : '1';
-    var sNew = value === 'false' || value === '0' || !value ? '' : '1';
+    var sOld = boolToStr_(oldValue), sNew = boolToStr_(value);
     if (sOld != sNew) {
       if (sNew) {
         self.state['data-checked'] = sNew;      // avoid recusive dual-assign
@@ -10926,12 +11331,12 @@ function defineOptDual_(self,state) {
 }
 
 function addOptSchema_(dSchema,iLevel) {
-  var sBoolStr = '[string]: "" or "1"';
-  dSchema['data-checked'] = [ iLevel+1,'string',null,sBoolStr ];
-  dSchema.isolated = [ iLevel+2,'string',null,sBoolStr ];
-  dSchema.recheckable = [ iLevel+3,'string',null,sBoolStr ];
-  dSchema.trigger = [iLevel+4,'string',null,'[string]: [sPath,{trigger,pop_option},[sPath,modifier], ...]'];
-  dSchema.popOption = [iLevel+5,'object',null,'[object]: {path:bodyElePath}'];
+  dSchema['data-checked'] = [ iLevel+1,'string',['','1'] ];
+  dSchema.isolated = [ iLevel+2,'string',['','1'] ];
+  dSchema.disabled = [ iLevel+3,'string',['','1'] ];
+  dSchema.recheckable = [ iLevel+4,'string',['','1'] ];
+  dSchema.trigger = [iLevel+5,'string',null,'[string]: [sPath,{trigger,pop_option},[sPath,modifier], ...]'];
+  dSchema.popOption = [iLevel+6,'object',null,'[object]: {path:bodyElePath}'];
   return dSchema;
 }
 
@@ -10982,6 +11387,8 @@ class TOptSpan_ extends TSpan_ {
   $$onClick(event) {
     if (W.__design__)
       event.stopPropagation();
+    if (this.state.disabled) return;
+    
     this.setChecked(null);
     if (this.$onClick) this.$onClick(event); // call by pass this
   }
@@ -11053,7 +11460,6 @@ class TOptOption_ extends TOptSpan_ {
     var dSchema = super._getSchema(self,iLevel + 200);
     dSchema.value = [ iLevel+1,'string' ];
     dSchema.label = [ iLevel+2,'string' ];
-    dSchema.disabled = [ iLevel+3,'string',['','disabled'] ];
     return dSchema;
   }
   
@@ -11061,13 +11467,13 @@ class TOptOption_ extends TOptSpan_ {
     var dState = super.getInitialState(), gui = this.$gui;
     
     this.defineDual('data-checked', function(value,oldValue) {
-      var sValue = (value === 'false' || value === '0' || !value? '': '1');
-      if (this.props.hasOwnProperty('selected'))
+      var sValue = boolToStr_(value);
+      if (hasOwn_.call(this.props,'selected'))
         this.state.selected = sValue; // avoid using duals.selected = xx
       
       var self = this;
       setTimeout( function() {
-        var node = findDomNode_(self);
+        var node = self.getHtmlNode();
         if (node) node.selected = !!value; // maybe no duals.selected, synchorized here
       },0);
     });
@@ -11132,6 +11538,8 @@ class TOptDiv_ extends TDiv_ {
   $$onClick(event) {
     if (W.__design__)
       event.stopPropagation();
+    if (this.state.disabled) return;
+    
     this.setChecked(null);
     if (this.$onClick) this.$onClick(event); // by pass this
   }
@@ -11188,6 +11596,8 @@ class TOptLi_ extends TP_ {
   $$onClick(event) {
     if (W.__design__)
       event.stopPropagation();
+    if (this.state.disabled) return;
+    
     this.setChecked(null);
     if (this.$onClick) this.$onClick(event); // by pass this
   }
@@ -11222,31 +11632,26 @@ class TOptInput_ extends TOptSpan_ {
   getInitialState() {
     var dState = super.getInitialState();
     
-    if (this.props.defaultValue !== undefined)
-      this.$gui.tagAttrs.push('defaultValue');  // data-checked should replace duals.defaultChecked
     var sType = this.props.type;
-    // this.$gui.syncValue = false; // default is false
-    if (sType === 'checkbox' || sType === 'radio') {
-      if (this.props.checked === undefined)
-        this.$gui.tagAttrs.push('checked');     // not use duals.checked
+    if (sType === 'checkbox' || sType === 'radio') { // no use duals.check, change to data-checked
+      if (this.props.checked === undefined)   // ignore defaultChecked
+        this.$gui.tagAttrs.push('checked');
     }
     else {
-      if (this.props.value === undefined) {
-        this.defineDual('value');  // force regist duals.value
-        this.$gui.syncValue = true;
-      }
+      var initValue = this.props.value !== undefined ?
+        (this.props.value || '') : (this.props.defaultValue || '');
+      this.defineDual('value',null,initValue);
     }
     
     this.defineDual('data-checked', function(value,oldValue) {
-      var sValue = (value === 'false' || value === '0' || !value? '': '1');
-      this.state.checked = sValue; // not use duals.checked = xx
+      this.state.checked = boolToStr_(value); // not use duals.checked = xx
     });
     
     return dState;
   }
   
   clearChecked(targ) {
-    if (!targ) targ = findDomNode_(this);
+    if (!targ) targ = this.getHtmlNode();
     if (targ) {
       if (targ.checked) targ.checked = false; // will trigger onChange
       if (this.state['data-checked'])
@@ -11272,15 +11677,13 @@ class TOptInput_ extends TOptSpan_ {
   $$onClick(event) {
     if (W.__design__)
       event.stopPropagation();
+    if (this.state.disabled) return;
+    
     var sType = this.state.type;
     if (sType !== 'checkbox' && sType !== 'radio')
       this.setChecked(null);
     
     if (this.$onClick) this.$onClick(event);
-  }
-  
-  render() {
-    return renderWithSync(this);
   }
 }
 
@@ -11485,7 +11888,7 @@ class TTempPanel_ extends TPanel_ {
     checkForIfElse_(this.$gui);
     this.isLibGui = false;
     var style_ = this.props.style;
-    if (this.props['hookTo.'] === topmostWidget_) {
+    if (isUnderBody_(this)) {
       this.duals.style = style_ = Object.assign({},style_,{position:'absolute'});
       if ((this.$gui.keyid+'').indexOf('$$') == 0) this.isLibGui = true;
     }
@@ -11518,9 +11921,12 @@ class TTempPanel_ extends TPanel_ {
       syncProps_(this);
       if (this.hideThis) return null;   // as <noscript>
       
+      var sTag = this.state['tagName.'];
+      if (!sTag) return getOnlyChild_(this);
+
       var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
       var props = setupRenderProp_(this,dStyle);
-      return reactCreate_('div',props);
+      return reactCreate_(sTag,props);  // ignore children
     }
   }
 }
@@ -11556,7 +11962,7 @@ class TTempDiv_ extends TUnit_ {
     checkForIfElse_(this.$gui);
     this.isLibGui = false;
     var style_ = this.props.style;
-    if (this.props['hookTo.'] === topmostWidget_) {
+    if (isUnderBody_(this)) {
       this.duals.style = style_ = Object.assign({},style_,{position:'absolute'});
       if ((this.$gui.keyid+'').indexOf('$$') == 0) this.isLibGui = true;
     }
@@ -11588,9 +11994,12 @@ class TTempDiv_ extends TUnit_ {
       syncProps_(this);
       if (this.hideThis) return null;   // as <noscript>
       
+      var sTag = this.state['tagName.'];
+      if (!sTag) return getOnlyChild_(this);
+
       var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
       var props = setupRenderProp_(this,dStyle);
-      return reactCreate_('div',props);
+      return reactCreate_(sTag,props);  // ignore children
     }
   }
 }
@@ -11644,9 +12053,12 @@ class TTempSpan_ extends TSpan_ {
       syncProps_(this);
       if (this.hideThis) return reactCreate_('span',displayNoneProp_);
       
+      var sTag = this.state['tagName.'];
+      if (!sTag) return getOnlyChild_(this);
+      
       var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
       var props = setupRenderProp_(this,dStyle);
-      return reactCreate_('span',props);
+      return reactCreate_(sTag,props);  // ignore children
     }
   }
 }
@@ -11671,7 +12083,7 @@ class TRefDiv_ extends TUnit_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    if (this.props['hookTo.'] === topmostWidget_)
+    if (isUnderBody_(this))
       utils.instantShow('warning: can not add RefDiv to topmost widget.');
     return dState;
   }
@@ -11690,6 +12102,8 @@ class TRefDiv_ extends TUnit_ {
   
   render() {
     // no need call syncProps_(this) and ignore this.hideThis
+    // 'tagName.' should fixed to 'div'
+    
     var sCls = classNameOf(this);
     var dProp = {style:{width:'0px',height:'0px'}};
     if (sCls) dProp.className = sCls;
@@ -11699,7 +12113,7 @@ class TRefDiv_ extends TUnit_ {
 
 T.RefDiv_ = TRefDiv_;
 T.RefDiv  = new TRefDiv_();
-var RefDiv__ = creator.RefDiv__ = createClass_(T.RefDiv._extend());
+var RefDiv__ = T.RefDiv._createClass(null);
 
 class TRefSpan_ extends TSpan_ {
   constructor(name,desc) {
@@ -11715,7 +12129,7 @@ class TRefSpan_ extends TSpan_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    if (this.props['hookTo.'] === topmostWidget_)
+    if (isUnderBody_(this))
       utils.instantShow('error: can not hook RefSpan to topmost widget.');
     return dState;
   }
@@ -11734,6 +12148,8 @@ class TRefSpan_ extends TSpan_ {
   
   render() {
     // no need call syncProps_(this) and ignore this.hideThis
+    // 'tagName.' should fixed to 'span'
+    
     var sCls = classNameOf(this);
     var dProp = {style:{width:'0px',height:'0px'}};
     if (sCls) dProp.className = sCls;
@@ -11743,7 +12159,7 @@ class TRefSpan_ extends TSpan_ {
 
 T.RefSpan_ = TRefSpan_;
 T.RefSpan  = new TRefSpan_();
-var RefSpan__ = creator.RefSpan__ = createClass_(T.RefSpan._extend());
+var RefSpan__ = T.RefSpan._createClass(null);
 
 // ScenePage
 //-----------------
@@ -11771,6 +12187,7 @@ class TScenePage_ extends TPanel_ {
     dProp.noShow = '';
     // dProp.width = 0.9999;   // default is 0.9999
     // dProp.height = 0.9999;  // defalut is 0.9999
+    dProp['tagName.'] = 'article';
     dProp['isScenePage.'] = 1;
     dProp.className = 'rewgt-panel rewgt-scene';
     return dProp;
@@ -11778,7 +12195,7 @@ class TScenePage_ extends TPanel_ {
   
   getInitialState() {
     var dState = super.getInitialState();
-    if (this.props['hookTo.'] !== topmostWidget_)
+    if (!isUnderBody_(this))
       utils.instantShow('error: ScenePage only hook to topmost widget.');
     
     var initStyle = Object.assign({},this.props.style,{position:'absolute',display:'none'}); // fixed to absolute, default hidden
@@ -11851,10 +12268,13 @@ class TScenePage_ extends TPanel_ {
     syncProps_(this);
     if (this.hideThis) return null;   // as <noscript>
     
-    if (this.props['isTemplate.']) {
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
+    if (this.props['isTemplate.']) {    // auto set 'isTemplate.' by parent when noShow is true
       var dStyle = Object.assign({},this.state.style,{width:'0px',height:'0px',display:'none'});
       var props = setupRenderProp_(this,dStyle);
-      return reactCreate_('div',props);
+      return reactCreate_('div',props); // ignore children
     }
     else {
       var bChild = this.prepareState();
@@ -11865,16 +12285,19 @@ class TScenePage_ extends TPanel_ {
         dStyle.display = 'none';
       }
       
+      var insEle = this.$gui.insertEle;
+      if (insEle) bChild = middleClone_(insEle,bChild); // insert under rewgt-center
       var centerDiv = reactCreate_('div',{'className':'rewgt-center'},bChild);
+      
       var props = setupRenderProp_(this,dStyle);
-      return reactCreate_('article',props,centerDiv);
+      return reactCreate_(sTag,props,centerDiv);
     }
   }
 }
 
 T.ScenePage_ = TScenePage_;
 T.ScenePage  = new TScenePage_();
-var ScenePage__ = createClass_(T.ScenePage._extend());
+var ScenePage__ = T.ScenePage._createClass(null);
 
 // MaskablePanel
 //--------------
@@ -12034,7 +12457,7 @@ class TMaskPanel_ extends TPanel_ {
     super.componentDidMount();
     
     if (W.__design__) {
-      var node = findDomNode_(this);
+      var node = this.getHtmlNode();
       if (node) {  // use html-event because design-GUI uses origianl DOM+JS, all html-event run before react-event
         node.onclick = noPropagation;
         node.ondblclick = noPropagation;
@@ -12057,6 +12480,7 @@ class TMaskPanel_ extends TPanel_ {
   }
 }
 
+// no share: T.MaskPanel_ T.MaskPanel
 var MaskPanel__ = createClass_((new TMaskPanel_())._extend());
 
 // MarkedDiv
@@ -12337,7 +12761,7 @@ function renewMarkdown_(compObj,mdText,callback) {
 class TMarkedDiv_ extends TDiv_ {
   constructor(name,desc) {
     super(name || 'MarkedDiv',desc);
-    this._defaultProp.width = undefined;
+    this._defaultProp.width = null;
     this._defaultProp.minWidth = 20;
     this._defaultProp.noShow = '';
     this._silentProp.push('marked.','hasStatic.','noSaveChild.');
@@ -12427,9 +12851,7 @@ class TMarkedDiv_ extends TDiv_ {
   getInitialState() {
     var state = super.getInitialState();
     
-    var self = this, gui = this.$gui, ownerObj = this.widget;
-    ownerObj = ownerObj && ownerObj.parent;
-    ownerObj = ownerObj && ownerObj.component;
+    var self = this, gui = this.$gui, ownerObj = this.parentOf(true);
     if (ownerObj && ownerObj.props['markedTable.']) {
       this.defineDual('colSpan', function(value,oldValue) {
         var num = parseInt(value);
@@ -12507,9 +12929,7 @@ class TMarkedDiv_ extends TDiv_ {
     function renderOwner() {
       var cellKey = self.$gui.keyid + '';
       setTimeout( function() {
-        var owner = self.widget;
-        owner = owner && owner.parent;
-        owner = owner && owner.component;
+        var owner = self.parentOf(true);
         if (owner && owner.cellKeys && owner.cellStyles) {
           owner.cellKeys[cellKey] = [self.state.rowSpan,self.state.colSpan];
           owner.cellStyles[cellKey] = self.state.tdStyle;  // maybe undefined
@@ -12533,9 +12953,13 @@ class TMarkedDiv_ extends TDiv_ {
     syncProps_(this);
     if (this.hideThis) return null;  // as <noscript>
     
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
+    
     var bChild = this.prepareState();
-    var props = setupRenderProp_(this);
-    return reactCreate_(this.state['tagName.'],props,bChild); // not use 'html.'
+    var props = setupRenderProp_(this), insEle = this.$gui.insertEle;
+    if (insEle) bChild = middleClone_(insEle,bChild);
+    return reactCreate_(sTag,props,bChild); // not use 'html.'
   }
 }
 
@@ -12566,6 +12990,9 @@ class TMarkedTable_ extends TMarkedDiv_ {
   render() {
     syncProps_(this);
     if (this.hideThis) return null;    // as <noscript>
+    
+    var sTag = this.state['tagName.'];
+    if (!sTag) return getOnlyChild_(this);
     
     var bChild = this.prepareState();  // bChild is new copied
     var props = setupRenderProp_(this);
@@ -12622,7 +13049,7 @@ class TMarkedTable_ extends TMarkedDiv_ {
     if (lastRow) bRow.push(reactCreate_.apply(null,lastRow));
     
     var tbody = reactCreate_.apply(null,bRow);
-    return reactCreate_('table',props,tbody);
+    return reactCreate_(sTag,props,tbody);  // ignore gui.insertEle
   }
 }
 

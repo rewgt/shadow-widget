@@ -413,7 +413,7 @@ if (Array.isArray(W)) extendWidget(W);else {
   window.W = W;
 }
 
-// W.$dataSrc = undefined; // undefined or {sPath:dInitProp}
+// W.$dataSrc = undefined;
 W.__debug__ = 0;
 W.$templates = {};
 W.$css = [];
@@ -456,8 +456,8 @@ var utils = W.$utils = {
   }
 };
 
-Object.defineProperty(utils, 'DIV', { enumerable: true, configurable: false, writable: false, value: 1 });
-Object.defineProperty(utils, 'SPAN', { enumerable: true, configurable: false, writable: false, value: 3 });
+// Object.defineProperty(utils,'DIV',{enumerable:true,configurable:false,writable:false,value:1});
+// Object.defineProperty(utils,'SPAN',{enumerable:true,configurable:false,writable:false,value:3});
 
 W.$cachedClass = {};
 W.$ex = new wdgtExtending(); // for extending, such as ex.update  // this.component is undefined
@@ -1869,6 +1869,62 @@ var re_lt_ = /&lt;/g,
 (function (hljs) {
   if (!hljs || !hljs.highlight) return;
 
+  var ln_re_ = /\r\n|\r|\n/g;
+  var num_re_ = /^[0-9][0-9]+ /; // start with 'nn' means line number tag
+  var hint_re_ = /^~~+ /; // start with '~~' means highlight this line
+
+  function getLineInfo(bRet, bNum, code) {
+    var numCount = 0,
+        hintCount = 0;
+    var bLn = code.split(ln_re_),
+        len = bLn.length;
+    var iLastLn = -1,
+        sLastNum = '0';
+    for (var i = 0; i < len; i++) {
+      var item = bLn[i],
+          hasHint = false;
+      var sNew = item.replace(hint_re_, function (sMatch) {
+        hasHint = true;hintCount += 1;
+        var iTmp = sMatch.length;
+        if (iLastLn + 1 == i) {
+          iLastLn = i;sLastNum = parseInt(sLastNum) + 1 + '';
+          iTmp -= 1;
+          sLastNum = sLastNum.slice(-iTmp); // trim to same width: ~~
+          if (sLastNum.length < iTmp) sLastNum = new Array(iTmp - sLastNum.length + 1).join('0') + sLastNum;
+          bRet[i] = sLastNum + '!';
+        } else bRet[i] = new Array(iTmp).join(' ') + '!';
+        return '';
+      });
+
+      if (hasHint) bLn[i] = sNew;else {
+        var hasNum = false;
+        var sNew2 = item.replace(num_re_, function (sMatch) {
+          hasNum = true;numCount += 1;
+          sLastNum = bRet[i] = sMatch.slice(0, -1);
+          iLastLn = i;
+          return '';
+        });
+        if (hasNum) bLn[i] = sNew2;
+      }
+    }
+
+    if (!bRet.length) // no changing
+      return code;else {
+      if (!hintCount && numCount <= 1) {
+        // avoid accident preceed-number
+        bRet.splice(0);
+        return code; // no changing
+      } else {
+        if (numCount) bNum.push(numCount);
+        return bLn.join('\n');
+      }
+    }
+  }
+
+  function makeLnNum(hasLnNum, item) {
+    return hasLnNum ? '<span class="hljs-ln-num" data="' + item + '"></span>' : '';
+  }
+
   utils.marked.setOptions({
     highlight: function highlight(code, sTag) {
       var isHtml = false;
@@ -1877,7 +1933,25 @@ var re_lt_ = /&lt;/g,
       } else sTag = 'plain';
 
       if (sTag == 'plain' || !isHtml) code = code.replace(re_lt_, '<').replace(re_gt_, '>').replace(re_amp_, '&');
-      if (sTag == 'plain') return code;else return hljs.highlight(sTag, code, true).value;
+
+      var bInfo = [],
+          bNum = [];
+      code = getLineInfo(bInfo, bNum, code);
+
+      if (sTag != 'plain') code = hljs.highlight(sTag, code, true).value;
+
+      var len = bInfo.length;
+      if (len) {
+        var bLn = code.split(ln_re_),
+            len2 = bLn.length;
+        for (var i = 0; i < len; i++) {
+          var item = bInfo[i];
+          if (item && i < len2) {
+            if (item.slice(-1) == '!') bLn[i] = '<span class="hljs-hint">' + makeLnNum(bNum.length, item.slice(0, -1)) + bLn[i] + '</span>';else bLn[i] = makeLnNum(bNum.length, item) + bLn[i];
+          }
+        }
+        return bLn.join('\n');
+      } else return code;
     }
   });
 })(window.hljs); // fix to cdn version of highlight.js
@@ -2056,6 +2130,45 @@ var re_lt_ = /&lt;/g,
 }).call(utils);
 //------- end of jsonp/ajax --------
 
+utils.bindMountData = function (data) {
+  if (!data || (typeof data === 'undefined' ? 'undefined' : _typeof(data)) != 'object') {
+    console.log('error: invalid W.$dataSrc');
+    return;
+  }
+
+  var idSetter = W.$idSetter; // must defined
+  Object.keys(idSetter).forEach(function (sKey) {
+    var fn = idSetter[sKey];
+    if (typeof fn != 'function') return;
+
+    var item = data[sKey];
+    if (item && (typeof item === 'undefined' ? 'undefined' : _typeof(item)) == 'object') {
+      var item2 = Object.assign({}, item),
+          attrs = item2.__attr__;
+      delete item2.__attr__;
+      if (!Array.isArray(attrs)) attrs = Object.keys(item2);
+
+      var wrapFn = wrapFunc(sKey, attrs, item2, fn);
+      Object.defineProperty(idSetter, sKey, { enumerable: true, configurable: true,
+        get: function get() {
+          return wrapFn;
+        } });
+    }
+  });
+
+  function wrapFunc(sKey, attrs, srcData, originFn) {
+    return function (value, oldValue, sAttr) {
+      if (originFn.call(this, value, oldValue, sAttr)) return; // if origin idSetter return `true` means no chain data
+      if (value == 2) {
+        // when mount
+        for (var i = 0, attr; attr = attrs[i]; i++) {
+          this.duals[attr] = srcData[attr];
+        }
+      }
+    };
+  }
+};
+
 utils.loadingEntry = function (require, module, exports) {
   var containNode_ = document.getElementById('react-container');
   if (!containNode_) return;
@@ -2069,7 +2182,7 @@ utils.loadingEntry = function (require, module, exports) {
   if (window.W !== W) {
     // old window.W maybe only has W.$modules
     if (window.W) W.$modules = window.W.$modules; // main.js maybe included after react-widget
-    if (W.__debug__ || W.__design__) window.W = W; // regist for debugging
+    window.W = W;
   }
 
   var bImporting_ = W.$modules;
@@ -2486,7 +2599,7 @@ var idSetter = W.$idSetter,
 })(window.location);
 
 utils.version = function () {
-  return '1.0.4';
+  return '1.0.5';
 };
 
 var vendorId_ = function (sUA) {
@@ -2706,12 +2819,12 @@ function identicalId() {
 }
 utils.identicalId = identicalId;
 
-function classNameOf(comp) {
+function classNameOf_(comp) {
   var s = comp.$gui.className,
       s2 = comp.state.klass;
   if (s) return s2 ? s + ' ' + s2 : s;else return s2 || '';
 }
-utils.classNameOf = classNameOf;
+utils.classNameOf = classNameOf_;
 
 function hasClass_(sClsName, cls) {
   // cls: ['clsA','clsB']  'clsA'  'clsA clsB'
@@ -2729,7 +2842,7 @@ function hasClass_(sClsName, cls) {
 
 utils.hasClass = function (comp, cls) {
   // cls: ['clsA','clsB']  'clsA'  'clsA clsB'
-  return hasClass_(classNameOf(comp), cls);
+  return hasClass_(classNameOf_(comp), cls);
 };
 
 function addClass_(sClsName, cls) {
@@ -2907,13 +3020,29 @@ utils.klassNames = klassNames_;
 
 function clearKlass_(s, ctrlCls) {
   var b = s.split(/ +/);
-  for (var i = b.length - 1; i >= 0; i--) {
-    var ss = b[i];
-    if (!ss || ctrlCls[ss]) b.splice(i, 1);
+  if (Array.isArray(ctrlCls)) {
+    for (var i = b.length - 1; i >= 0; i--) {
+      var ss = b[i];
+      if (!ss || ctrlCls.indexOf(ss) >= 0) b.splice(i, 1);
+    }
+  } else {
+    for (var i = b.length - 1; i >= 0; i--) {
+      var ss = b[i];
+      if (!ss || ctrlCls[ss]) b.splice(i, 1);
+    }
   }
   return b.join(' ');
 }
 utils.clearKlass = clearKlass_;
+
+utils.setupKlass = function (sKlass, ctrlCls) {
+  var b = [clearKlass_(sKlass, ctrlCls)],
+      len = arguments.length;
+  for (var i = 2; i < len; i++) {
+    b.push(arguments[i]);
+  }
+  return klassNames_.apply(null, b);
+};
 
 function containKlass_(s, cls) {
   if (Array.isArray(cls)) {
@@ -3014,7 +3143,7 @@ utils.eachComponent = function (comp, callback) {
 
 function setupRenderProp_(comp, dStyle) {
   var lnkPath,
-      cls = classNameOf(comp),
+      cls = classNameOf_(comp),
       dState = comp.state,
       gui = comp.$gui;
   var tagAttrs = gui.tagAttrs,
@@ -3023,6 +3152,10 @@ function setupRenderProp_(comp, dStyle) {
   for (var i = 0, sKey; sKey = tagAttrs[i]; i++) {
     props[sKey] = dState[sKey];
   }
+
+  var data_ = props.data;
+  if (data_ !== undefined && typeof data_ != 'string') delete props.data; // only render string type of duals.data
+
   for (var i = 0, sKey; sKey = dataset[i]; i++) {
     props[sKey] = dState[sKey];
   }
@@ -3031,46 +3164,6 @@ function setupRenderProp_(comp, dStyle) {
   if (W.__design__ && (lnkPath = dState['data-group.opt'])) props['data-group.opt'] = lnkPath; // help for designer
   return props;
 }
-
-utils.bindMountData = function (data) {
-  if (!data) data = W.$dataSrc;
-  if (!data || (typeof data === 'undefined' ? 'undefined' : _typeof(data)) != 'object') {
-    console.log('error: invalid W.$dataSrc');
-    return;
-  }
-
-  Object.keys(idSetter).forEach(function (sKey) {
-    var fn = idSetter[sKey];
-    if (typeof fn != 'function') return;
-
-    var item = data[sKey];
-    if (item && (typeof item === 'undefined' ? 'undefined' : _typeof(item)) == 'object') {
-      var item2 = Object.assign({}, item),
-          attrs = item2.__attr__;
-      delete item2.__attr__;
-      if (!Array.isArray(attrs)) attrs = Object.keys(item2);
-
-      var wrapFn = wrapFunc(sKey, attrs, item2, fn);
-      Object.defineProperty(idSetter, sKey, { enumerable: true, configurable: true,
-        get: function get() {
-          return wrapFn;
-        } });
-    }
-  });
-
-  function wrapFunc(sKey, attrs, srcData, originFn) {
-    return function (value, oldValue) {
-      var self = this;
-      if (originFn.call(self, value, oldValue)) return; // if origin idSetter return `true` means no chain data
-      if (value == 2) {
-        // when mount
-        for (var i = 0, attr; attr = attrs[i]; i++) {
-          self.duals[attr] = srcData[attr];
-        }
-      }
-    };
-  }
-};
 
 function fireTrigger_(oldData, comp) {
   // step 1: get trigger data
@@ -3210,17 +3303,21 @@ utils.setChildren = function (comp, children, insertEle, callback) {
       console.log('error: invalid argument (insertEle) for panel');
       insertEle = undefined;
     } else {
-      if (!reactIsValid_(insertEle) || insertEle.props['childInline.'] !== undefined) {
-        console.log('error: invalid argument (insertEle)');
-        insertEle = undefined;
+      if (Array.isArray(insertEle)) {
+        if (insertEle.length == 0) insertEle = null;
+      } else {
+        if (!reactIsValid_(insertEle) || insertEle.props['childInline.'] !== undefined) {
+          console.log('error: invalid argument (insertEle)');
+          insertEle = null;
+        }
       }
     }
   }
 
   if (!Array.isArray(children)) return; // fatal error
 
+  if (insertEle || insertEle === null) gui.insertEle = insertEle;
   if (children === gui.comps) {
-    if (insertEle || insertEle === null) gui.insertEle = insertEle;
     if (callback) {
       if (gui.inSync) {
         setTimeout(function () {
@@ -3274,7 +3371,7 @@ utils.setChildren = function (comp, children, insertEle, callback) {
   if (insertEle || insertEle === null) gui.insertEle = insertEle;
 
   if (!gui.inSync) {
-    if (gui.compState >= 2) {
+    if (gui.compState >= 1.5) {
       comp.setState({ id__: chooseIdentical_(comp.state.id__) }, callback); // trigger re-render
     } else {
       // maybe id__ is 1, should process at next tick
@@ -3539,6 +3636,13 @@ ex.regist('setChecked', function (sPath, newOpt) {
     var targ = getCompByPath_(comp, sPath);
     if (targ && targ.props['isOption.']) targ.setChecked(null, newOpt); // callback=null
   }
+});
+
+ex.regist('elementOf', function (sPath) {
+  var info = this.evalInfo();
+  var comp = info && info[0],
+      ele = comp && comp.elementOf(sPath);
+  return ele || null;
 });
 
 function getCurrExprSpace_(ex, comp) {
@@ -4502,8 +4606,8 @@ function setupExprAst(sExpr, comp, sKey) {
 
 // find target component and locate which callspace, pathFlag: -N or sPath
 function findComponent_(comp, pathFlag, bInfo, parentIdx) {
-  var wdgt = comp.widget;
   var parentNum = parentIdx || 0; // if parentNum > 0 means access from sub level
+  var wdgt = comp.widget;
   if (typeof pathFlag == 'number') {
     var iLastIdx = undefined;
     while (wdgt) {
@@ -5500,14 +5604,31 @@ function triggerConnTo_(bConn, value, oldValue, sKey) {
   }
 }
 
+function triggerDual_(comp, attr, oldValue) {
+  var gui = comp.$gui,
+      bConn = gui.connectTo[attr];
+  if (bConn && gui.compState >= 2) {
+    // not trigger when first render
+    setTimeout(function () {
+      triggerConnTo_(bConn, comp.state[attr], oldValue, attr);
+    }, 0);
+  }
+}
+utils.triggerDual = triggerDual_;
+
 function dualFuncOfGetSet_(comp, attr, superSet, setFn, baseDual) {
   var gui = comp.$gui,
       isId__ = attr == 'id__';
-  if (baseDual) {
-    if (isId__) {
+  if (isId__) {
+    if (baseDual) {
       baseDual = undefined;
       console.log('error: can not apply base.setter to duals.id__');
-    } else if (superSet) baseDual.setter = superSet;else {
+    }
+    if (superSet && setFn) gui.hasIdSetter = true;
+  }
+
+  if (baseDual) {
+    if (superSet) baseDual.setter = superSet;else {
       baseDual.setter = function (value, oldValue) {
         comp.state[attr] = value;
       };
@@ -5520,68 +5641,72 @@ function dualFuncOfGetSet_(comp, attr, superSet, setFn, baseDual) {
   }
 
   function setterFunc(value) {
-    if (gui.inSync) {
-      var oldValue, isTop;
-      if (arguments.length >= 2) {
-        oldValue = arguments[1];
-        isTop = false;
-      } else {
-        // is topmost level
-        oldValue = this.state[attr];
-        if (oldValue === value) return; // if same to old, just ignore
-        isTop = true;
-      }
+    if (!this.state) {
+      gui.initDuals.push([attr, value]); // maybe undefine later, but used only when this.duals.attr exists
+      return;
+    }
 
-      var triggerLsn = false;
-      if (isId__ && value <= 2) {
-        // must not use baseDual (base.setter)
-        if (isTop) this.state.id__ = gui.id__ = value; // if value > 2, setter will assign gui.id__
-        if (superSet) superSet(value, oldValue); // id__ not support 'baseDual'
-        if (setFn) setFn(value, oldValue);
-        if (value == 2) gui.id2__ = 0; // next auto insert duals.id__ = identicalId() 
-        triggerLsn = !superSet && value != 0;
-      } else {
+    var oldValue, isTop;
+    if (arguments.length >= 2) {
+      oldValue = arguments[1];
+      isTop = false;
+    } else {
+      // is topmost level
+      oldValue = this.state[attr];
+      if (oldValue === value) return; // if same to old, just ignore
+      isTop = true;
+    }
+
+    var triggerLsn = false;
+    if (isId__ && value <= 2) {
+      if (isTop) this.state.id__ = gui.id__ = value;
+      if (superSet) superSet(value, oldValue); // id__ not support 'base.setter'
+      if (setFn) setFn(value, oldValue, attr);
+      if (value == 1) gui.id2__ = 0; // next auto insert duals.id__ = identicalId() 
+      triggerLsn = !superSet && value != 0;
+    } else {
+      if (gui.inSync) {
+        if (gui.compState <= 1) {
+          // delay assignment when duals.id__ = 1
+          gui.initDuals.push([attr, value]);
+          return;
+        }
+        // else, compState must be >= 1.5
+
         if (superSet) {
           if (!baseDual) {
-            if (isTop) this.state[attr] = value;
+            if (isTop) this.state[attr] = value;else value = this.state[attr];
             superSet(value, oldValue);
           }
+          // else, call super by base.setter()
         } else {
-          if (isTop && !baseDual) this.state[attr] = value;
+          if (isTop && !baseDual) this.state[attr] = value;else value = this.state[attr]; // try using newest value
           triggerLsn = true;
         }
-        if (setFn) setFn(value, oldValue);
-      }
-
-      if (triggerLsn) {
-        // only trigger listen in inner-most setter-func // avoid trigger twice
-        var bConn = gui.connectTo[attr];
-        if (bConn && gui.compState >= 2) {
-          // not trigger when first render
-          setTimeout(function () {
-            triggerConnTo_(bConn, comp.state[attr], oldValue, attr);
-          }, 0);
-        }
-      }
-    } else {
-      // current not in comp.render()
-      if (!this.state) {
-        gui.initDuals.push([attr, value]); // maybe undefine later, but used only when this.duals.attr exists
-      } else if (isId__ && value == 0) {
-        // must not use base.setter
-        var oldValue = this.state.id__;
-        if (oldValue == 0) return; // if same to old, just ignore
-
-        this.state.id__ = gui.id__ = value;
-        if (setFn) setFn(value, oldValue); // no delay // not call superSet
+        if (setFn) setFn(value, oldValue, attr);
       } else {
+        // current not in comp.render()
         var bNew = gui.duals_;
         if (bNew) // still in pending
           bNew.push([attr, value]);else {
+          if (this.state.id__ == 2 && !isId__) // re-render it since id__ == 2 will quit render
+            gui.id2__ = 0; // force next render auto call duals.id__ = xx
+
           bNew = gui.duals_ = this.state.duals.slice(0);
           bNew.push([attr, value]);
           comp.setState({ duals: bNew });
         }
+      }
+    }
+
+    if (triggerLsn) {
+      // only trigger listen in inner-most setter-func // avoid trigger twice
+      var bConn = gui.connectTo[attr];
+      if (bConn && gui.compState >= 2) {
+        // not trigger when first render
+        setTimeout(function () {
+          triggerConnTo_(bConn, comp.state[attr], oldValue, attr);
+        }, 0);
       }
     }
   }
@@ -5856,6 +5981,8 @@ function syncProps_(comp) {
         });
       }
 
+      gui.compState = 1.5; // 1.5 means can assign duals.xx, but no trigger listen
+
       var passLen = bWaitPass.length;
       gui.initDuals.forEach(function (item2) {
         var sKey = item2[0],
@@ -5911,7 +6038,7 @@ function syncProps_(comp) {
         if (sCtrlFlow == 'if' || sCtrlFlow == 'elif') {
           // will auto update nearby $elif $else, except when target not ready yet
           hasCond = true;
-          comp.hideThis = !ctrlValue;
+          comp['hide.'] = !ctrlValue;
         } else if (sCtrlFlow == 'else') {
           if (firstRender) {
             // ensure comp.state['else'] is correct, maybe not updated by previous $if $elif since this node ready yet
@@ -5919,7 +6046,7 @@ function syncProps_(comp) {
             ctrlValue = comp.state['else'] = !anyPrevIfTrue2(comp); // check by none-eval
           }
           hasCond = true;
-          comp.hideThis = !ctrlValue;
+          comp['hide.'] = !ctrlValue;
         }
       }
 
@@ -6033,7 +6160,7 @@ function syncProps_(comp) {
     }
 
     if (gui.id__ === comp.state.id__) {
-      if (gui.id2__ == 0) // not fired by duals.id__ = xx // when mount auto insert: duals.id__ = identicalId
+      if (gui.id2__ == 0) // not fired by duals.id__ = xx
         duals.id__ = identicalId_ !== comp.state.id__ ? identicalId_ : identicalId();
       // else, in duals.id__ assigning // ignore
     } else {
@@ -6041,7 +6168,7 @@ function syncProps_(comp) {
       comp.state.id__ = iTmp - 1; // iTmp-1 >= 3 because identicalId() >= 4, force make different
       duals.id__ = iTmp; // setter of duals.id__ must run since state.id__ changed
     }
-    gui.id2__ = 0; // gui.id2__ == 0 means finish one loop, gui.id2__ != 0 means by 'duals.id__ = xx', else, changing by setState({id__})
+    gui.id2__ = 0; // gui.id2__ == 0 means finish one loop // gui.id2__ != 0 means by 'duals.id__ = xx', else, changing by setState({id__})
 
     if (gui.isChildExpr && gui.children2 !== comp.props.children) {
       gui.removeNum += gui.comps.length; // wait to rescan in duals.childNumId
@@ -7318,14 +7445,12 @@ function pathLevelInfo_(sPath_) {
     iLevel = -1; // absolute
     sPath = sPath.slice(1);
   } else if (ch == '/') {
-    if (sPath[1] == '/' && sPath.length >= 2) {
-      sPath = sPath.slice(2);
-      iLevel = -1;
-      isSibling = true; // sPath != ''
-    } else {
-      iLevel = -1; // absolute
-      sPath = sPath.slice(1);
-    }
+    if (sPath[1] === '/') // maybe: //   //seg  ////seg
+      return [sPath.slice(2), -1, true]; // iLevel = -1, isSibling = true
+    else {
+        iLevel = -1; // absolute
+        sPath = sPath.slice(1);
+      }
   } else isSibling = true; // iLevel = 0, sPath != ''
 
   if (sPath.indexOf('/') >= 0) {
@@ -7347,7 +7472,18 @@ function getCompByPath_(entry, sPath_) {
     var targ = entry.widget,
         owner = targ;
     if (iLevel < 0) owner = targ && targ.parent; // start with '//', maybe sPath=''
-    if (owner) return doCallback(sPath ? owner.W(sPath) : owner);
+    if (owner) {
+      var sHead = sPath.slice(0, 2);
+      while (sHead == '//') {
+        owner = owner.parent;
+        if (!owner) return doCallback(null);
+
+        sPath = sPath.slice(2);
+        sHead = sPath.slice(0, 2);
+      }
+
+      return doCallback(sPath ? owner.W(sPath) : owner);
+    }
   } else if (iLevel == -1) {
     // not isSibling means is absolute
     if (sPath) return doCallback(W.W(sPath));
@@ -7432,6 +7568,15 @@ function loadReference_(entry, keyName, callback) {
       var targ;
       if (iLevel < 0 && (targ = entry.widget)) {
         // only get from linker parent, not from linker self
+        var sHead = sPath.slice(0, 2);
+        while (sHead == '//') {
+          targ = targ.parent;
+          if (!targ) return doCallback(null, sPath_); // error
+
+          sPath = sPath.slice(2);
+          sHead = sPath.slice(0, 2);
+        }
+
         getComponent(targ, sPath, sPath_, false);
         return;
       }
@@ -8115,6 +8260,72 @@ var supportedAttr_ = { // 5 reserved for special precessing
   className: 5, style: 5, width: 5, height: 5
 };
 
+function parseWidth_(b) {
+  if (!Array.isArray(b)) {
+    if (typeof b == 'number') return [b, b, b, b];else return [0, 0, 0, 0];
+  }
+
+  var iLen = b.length;
+  if (iLen == 0) return [0, 0, 0, 0];else if (iLen == 1) {
+    var i = parseFloat(b[0]) || 0;
+    return [i, i, i, i];
+  } else if (iLen == 2) {
+    var i = parseFloat(b[0]) || 0,
+        i2 = parseFloat(b[1]) || 0;
+    return [i, i2, i, i2];
+  } else if (iLen == 3) {
+    var i = parseFloat(b[0]) || 0,
+        i2 = parseFloat(b[1]) || 0,
+        i3 = parseFloat(b[2]) || 0;
+    return [i, i2, i3, i2];
+  } else {
+    var i = parseFloat(b[0]) || 0,
+        i2 = parseFloat(b[1]) || 0;
+    var i3 = parseFloat(b[2]) || 0,
+        i4 = parseFloat(b[3]) || 0;
+    return [i, i2, i3, i4];
+  }
+}
+
+function parseWidth2_(b) {
+  if (!Array.isArray(b)) {
+    if (typeof b == 'number') return [b, b, b, b];else {
+      if (b === null) return [null, null, null, null];else return [0, 0, 0, 0];
+    }
+  }
+
+  var iLen = b.length;
+  if (iLen == 0) return [0, 0, 0, 0];else if (iLen == 1) {
+    var i = b[0];
+    i = i === null ? null : parseFloat(i) || 0;
+    return [i, i, i, i];
+  } else if (iLen == 2) {
+    var i = b[0],
+        i2 = b[1];
+    i = i === null ? null : parseFloat(i) || 0;
+    i2 = i2 === null ? null : parseFloat(i2) || 0;
+    return [i, i2, i, i2];
+  } else if (iLen == 3) {
+    var i = b[0],
+        i2 = b[1],
+        i3 = b[2];
+    i = i === null ? null : parseFloat(i) || 0;
+    i2 = i2 === null ? null : parseFloat(i2) || 0;
+    i3 = i3 === null ? null : parseFloat(i3) || 0;
+    return [i, i2, i3, i2];
+  } else {
+    var i = b[0],
+        i2 = b[1],
+        i3 = b[2],
+        i4 = b[3];
+    i = i === null ? null : parseFloat(i) || 0;
+    i2 = i2 === null ? null : parseFloat(i2) || 0;
+    i3 = i3 === null ? null : parseFloat(i3) || 0;
+    i4 = i4 === null ? null : parseFloat(i4) || 0;
+    return [i, i2, i3, i4];
+  }
+}
+
 function getSparedPixel_(obj, wdgt, isRow, iTotal) {
   // iTotal is cssWidth or cssHeight
   if (typeof iTotal != 'number') return null;
@@ -8143,7 +8354,7 @@ function getSparedPixel_(obj, wdgt, isRow, iTotal) {
       } else return null; // if not number take as auto
     }
 
-    iRet -= cellSpace * (iLen + 1);
+    iRet -= cellSpace * iLen;
     if (iRet < 0) return null; // auto
     else return iRet;
   }
@@ -8156,20 +8367,28 @@ function getSparedPixel_(obj, wdgt, isRow, iTotal) {
     if (!child || child.props['isReference.']) continue;
 
     var sKey = getElementKey_(child);
-    var wd,
+    var mrg,
+        wd,
         childObj = sKey && wdgt[sKey];
     childObj = childObj && childObj.component;
-    if (childObj && childObj.state) // has mounted
-      wd = isRow ? childObj.state.width : childObj.state.height;else wd = isRow ? child.props.width : child.props.height;
+    if (childObj && childObj.state) {
+      // has mounted
+      mrg = childObj.state.margin || [];
+      wd = isRow ? childObj.state.width : childObj.state.height;
+    } else {
+      mrg = parseWidth_(child.props.margin);
+      wd = isRow ? child.props.width : child.props.height;
+    }
 
     if (typeof wd == 'number') {
       if (wd >= 0) {
         if (wd >= 1) iRet -= wd;else if (wd >= 0.9999) iRet -= iTotal;else iRet -= wd * iTotal;
       } // else, ignore negative percent
+      iRet -= isRow ? (mrg[1] || 0) + (mrg[3] || 0) : (mrg[0] || 0) + (mrg[2] || 0);
     } else return null; // not number, it should be undefined (100%) or 'auto'
   }
 
-  iRet -= cellSpace * (1 + iLen);
+  // iRet -= cellSpace * (1 + iLen);  // only GridPanel using cellSpace
   if (iRet <= 0) return null; // if no enough space, take as 'auto'
   else return iRet;
 }
@@ -8375,37 +8594,56 @@ function wrapCompEvt_(comp, sEvName, ownerKey) {
 }
 
 function middleClone_(insEle, bChild) {
-  var children = insEle.props.children;
-  if (children) {
+  // insEle must not be null // return null/ele/[ele,...]
+  var children,
+      thisEle = null;
+  if (Array.isArray(insEle)) children = insEle;else {
+    thisEle = insEle;
+    children = thisEle.props.children;
+    if (!children) return reactClone_.apply(undefined, [thisEle, {}].concat(_toConsumableArray(bChild)));
     children = children2Arr_(children);
+  }
 
-    var lastEle,
-        iLast = children.length - 1;
-    if (iLast >= 0 && reactIsValid_(lastEle = children[iLast])) {
-      if (iLast >= 1 && getElementKey_(lastEle) !== 'foo') {
-        // try clone bChild in elementOf(key='foo')
-        var iLoop = iLast - 1;
-        while (iLoop >= 0) {
-          var tmp = children[iLoop];
-          if (reactIsValid_(tmp) && getElementKey_(tmp) === 'foo') {
-            var b2 = children.slice(0, iLoop);
-            b2.push(middleClone_(tmp, bChild));
-            for (var ii = iLoop + 1; ii <= iLast; ii++) {
-              b2.push(children[ii]);
+  var lastEle,
+      iLast = children.length - 1;
+  if (iLast >= 0 && reactIsValid_(lastEle = children[iLast])) {
+    if (iLast >= 1 && getElementKey_(lastEle) !== 'foo') {
+      // try clone bChild in elementOf(key='foo')
+      var iLoop = iLast - 1;
+      while (iLoop >= 0) {
+        var tmp = children[iLoop];
+        if (reactIsValid_(tmp) && getElementKey_(tmp) === 'foo') {
+          var b2 = children.slice(0, iLoop),
+              newClone = middleClone_(tmp, bChild);
+          if (newClone) b2.push(newClone);
+          for (var ii = iLoop + 1; ii <= iLast; ii++) {
+            b2.push(children[ii]);
+          }
+
+          if (!thisEle) return b2; // return array of element
+          else {
+              b2.unshift(thisEle, {});
+              return reactClone_.apply(null, b2); // return one element
             }
-            b2.unshift(insEle, {});
-            return reactClone_.apply(null, b2);
-          } else iLoop -= 1;
-        }
+        } else iLoop -= 1;
       }
+    }
 
-      var b = children.slice(0, -1);
-      b.push(middleClone_(lastEle, bChild)); // always choose last child to append
-      b.unshift(insEle, {});
+    var b = children.slice(0, -1);
+    var newClone = middleClone_(lastEle, bChild); // always choose last child to append
+    if (newClone) b.push(newClone);
+
+    if (!thisEle) return b;else {
+      b.unshift(thisEle, {});
       return reactClone_.apply(null, b);
     }
   }
-  return reactClone_(insEle, {}, [].concat(_toConsumableArray(bChild)));
+
+  return thisEle ? reactClone_.apply(undefined, [thisEle, {}].concat(_toConsumableArray(bChild))) : null;
+}
+
+function bindable_(func) {
+  return func.hasOwnProperty('prototype');
 }
 
 var _hyphenPattern = /-(.)/g;
@@ -8722,7 +8960,7 @@ var TWidget_ = function () {
       var template = this.getShadowTemplate();
       Object.defineProperty(this, '_', { enumerable: false, configurable: false, writable: false, value: template });
       this.isHooked = false; // like this.isMounted(), but can be used in render()
-      this.hideThis = false;
+      this['hide.'] = false;
 
       // step 2: define duals, tagAttrs, data-* / aria-*
       this.duals = {};
@@ -8815,11 +9053,9 @@ var TWidget_ = function () {
             }
 
             var item2 = item.slice(1);
-            if (item2 == 'id__') {
-              // pass setter by props.$id__
+            if (item2 == 'id__') // pass setter by props.$id__
               dualIdSetter = itemValue; // will bind this in defineDual('id__')
-              gui.hasIdSetter = true;
-            } else this[item] = currEvSet[item2] = itemValue.bind(this);
+            else this[item] = currEvSet[item2] = bindable_(itemValue) ? itemValue.bind(this) : itemValue;
           }
           // else ignore  // $XX only can be string or function, ignore others
         } else {
@@ -8914,7 +9150,14 @@ var TWidget_ = function () {
         this.state.klass = value || '';
       });
       this.defineDual('style', function (value, oldValue) {
-        this.state.style = Object.assign({}, oldValue, value);
+        if (!this.state['tagName.']) {
+          // current is virtual node
+          var b = utils.eachComponent(this),
+              childComp = b[0];
+          if (childComp) childComp.duals.style = value;
+        } else {
+          this.state.style = Object.assign({}, oldValue, value);
+        }
       });
       this.defineDual('left', function (value, oldValue) {
         this.state.left = isNaN(value) ? null : value; // isNaN(null) is false
@@ -8984,7 +9227,7 @@ var TWidget_ = function () {
       });
       this.defineDual('borderWidth', function (value, oldValue) {
         var oldV = oldValue || [0, 0, 0, 0];
-        var newV = this.state.borderWidth = parseWidth(value, !gui.isPanel);
+        var newV = this.state.borderWidth = gui.isPanel ? parseWidth_(value) : parseWidth2_(value);
 
         var changed = false;
         if (this.$gui.useSparedX) {
@@ -8996,7 +9239,7 @@ var TWidget_ = function () {
       });
       this.defineDual('padding', function (value, oldValue) {
         var spareX,
-            newV = this.state.padding = parseWidth(value, !gui.isPanel);
+            newV = this.state.padding = gui.isPanel ? parseWidth_(value) : parseWidth2_(value);
 
         if ((spareX = this.$gui.useSparedX) || this.$gui.useSparedX) {
           var changed = false,
@@ -9011,14 +9254,14 @@ var TWidget_ = function () {
         }
       });
       this.defineDual('margin', function (value, oldValue) {
-        this.state.margin = parseWidth(value, !gui.isPanel);
+        this.state.margin = gui.isPanel ? parseWidth_(value) : parseWidth2_(value);
       });
       this.defineDual('id__', function (value, oldValue) {
         // should not use props.id__
         this.state.id__ = value; // is first render when oldValue == 0
         gui.id__ = gui.id2__ = value;
       }); // default this.state.id__ is 0
-      if (dualIdSetter) this.defineDual('id__', dualIdSetter);
+      if (dualIdSetter) this.defineDual('id__', dualIdSetter); // will auto set: gui.hasIdSetter = true
 
       this.defineDual('trigger', triggerExprFn_); // default value is undefined
       this.defineDual('cellSpacing'); // will override in GridPanel
@@ -9095,10 +9338,11 @@ var TWidget_ = function () {
             var oldSize = this.state.innerSize,
                 newSize = [iWd, iHi];
 
-            this.setState({
-              left: frameInfo.leftWd, top: frameInfo.topHi,
+            var dNew = { left: frameInfo.leftWd, top: frameInfo.topHi,
               parentWidth: iWd, parentHeight: iHi, innerSize: newSize
-            });
+            };
+            if (utils.dragInfo.justResized) dNew.id__ = identicalId(); // force renew
+            this.setState(dNew);
 
             if (hasOwn_.call(this.duals, 'innerSize')) {
               // can not assign duals.innerSize, but can trigger listen
@@ -9360,45 +9604,6 @@ var TWidget_ = function () {
       });
 
       return dState;
-
-      function parseWidth(b, checkNull) {
-        if (!Array.isArray(b)) {
-          if (typeof b == 'number') return [b, b, b, b];else {
-            if (checkNull && b === null) return [null, null, null, null];else return [0, 0, 0, 0];
-          }
-        }
-
-        var iLen = b.length;
-        if (iLen == 0) return [0, 0, 0, 0];else if (iLen == 1) {
-          var i = b[0];
-          i = checkNull && i === null ? null : parseFloat(i) || 0;
-          return [i, i, i, i];
-        } else if (iLen == 2) {
-          var i = b[0],
-              i2 = b[1];
-          i = checkNull && i === null ? null : parseFloat(i) || 0;
-          i2 = checkNull && i2 === null ? null : parseFloat(i2) || 0;
-          return [i, i2, i, i2];
-        } else if (iLen == 3) {
-          var i = b[0],
-              i2 = b[1],
-              i3 = b[2];
-          i = checkNull && i === null ? null : parseFloat(i) || 0;
-          i2 = checkNull && i2 === null ? null : parseFloat(i2) || 0;
-          i3 = checkNull && i3 === null ? null : parseFloat(i3) || 0;
-          return [i, i2, i3, i2];
-        } else {
-          var i = b[0],
-              i2 = b[1],
-              i3 = b[2],
-              i4 = b[3];
-          i = checkNull && i === null ? null : parseFloat(i) || 0;
-          i2 = checkNull && i2 === null ? null : parseFloat(i2) || 0;
-          i3 = checkNull && i3 === null ? null : parseFloat(i3) || 0;
-          i4 = checkNull && i4 === null ? null : parseFloat(i4) || 0;
-          return [i, i2, i3, i4];
-        }
-      }
     }
   }, {
     key: 'shouldComponentUpdate',
@@ -9547,7 +9752,7 @@ var TWidget_ = function () {
           this.setState(data2, callback);
         }
       } else {
-        if (this.state.id__ != 1) console.log('warning: reRender() failed when component unhooked.');
+        if (this.state.id__ > 1 && (W.__design__ || W.__debug__)) console.log('warning: reRender() failed when component unhooked.');
         if (callback) callback();
       }
     }
@@ -9796,14 +10001,19 @@ var TWidget_ = function () {
     }
   }, {
     key: 'parentOf',
-    value: function parentOf(noVirtual, sRole) {
+    value: function parentOf(noVirtual, sRole, scanMax) {
       var self = this,
           wdgt = self.widget,
           owner = wdgt && wdgt.parent;
       var ownerObj = owner && owner.component;
       if (noVirtual) {
+        var iCount = 1,
+            iMax = scanMax || 65535;
         while (ownerObj && (self.props['data-rewgt-owner'] || sRole && ownerObj.state.role !== sRole)) {
           // has 'data-rewgt-owner' means ownerObj is virtual // check props.role is expected or not
+          if (iCount >= iMax) return null;
+          iCount += 1;
+
           self = ownerObj;
           owner = owner.parent;
           ownerObj = owner && owner.component;
@@ -10678,7 +10888,7 @@ var TWidget_ = function () {
     value: function render() {
       // TWidget_.render() should not be overrided by inherited class
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -11529,7 +11739,7 @@ var TGridPanel_ = function (_TPanel_) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -11601,7 +11811,7 @@ var TTableRow_ = function (_TUnit_2) {
           oldWd = gui.cssWidth,
           oldHi = gui.cssHeight;
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -11753,7 +11963,7 @@ var TTablePanel_ = function (_TPanel_2) {
           oldWd = gui.cssWidth,
           oldHi = gui.cssHeight; // save old value to judge changing
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -11881,7 +12091,7 @@ var TDiv_ = function (_TUnit_3) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -11997,7 +12207,7 @@ var THiddenDiv_ = function (_TDiv_2) {
     key: 'getInitialState',
     value: function getInitialState() {
       var dState = _get(THiddenDiv_.prototype.__proto__ || Object.getPrototypeOf(THiddenDiv_.prototype), 'getInitialState', this).call(this);
-      this.hideThis = true;
+      if (!W.__design__) this.duals.style = { display: 'none' };
       return dState;
     }
   }]);
@@ -12094,7 +12304,7 @@ var TP_ = function (_TUnit_4) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -12141,7 +12351,7 @@ var TNoscript_ = function (_TP_) {
     key: 'render',
     value: function render() {
       syncProps_(this); // should call syncProps since duals.attr in using
-      if (this.hideThis) return null;
+      if (this['hide.']) return null;
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -12396,7 +12606,7 @@ var TTbody_ = function (_TVirtualDiv_) {
     value: function render() {
       if (W.__design__) {
         syncProps_(this);
-        if (this.hideThis) return null; // as <noscript>
+        if (this['hide.']) return null; // as <noscript>
 
         var sTag = this.state['tagName.'];
         if (!sTag) return getOnlyChild_(this);
@@ -12475,8 +12685,30 @@ var THr_ = function (_TP_8) {
 T.Hr_ = THr_;
 T.Hr = new THr_();
 
-T.Pre_ = simpleExtends(TP_, 'Pre');
-T.Pre = new T.Pre_();
+var TPre_ = function (_TP_9) {
+  _inherits(TPre_, _TP_9);
+
+  function TPre_(name, desc) {
+    _classCallCheck(this, TPre_);
+
+    return _possibleConstructorReturn(this, (TPre_.__proto__ || Object.getPrototypeOf(TPre_)).call(this, name || 'Pre', desc));
+  }
+
+  _createClass2(TPre_, [{
+    key: 'getDefaultProps',
+    value: function getDefaultProps() {
+      var props = _get(TPre_.prototype.__proto__ || Object.getPrototypeOf(TPre_.prototype), 'getDefaultProps', this).call(this);
+      props['tagName.'] = 'pre';
+      props['isPre.'] = true;
+      return props;
+    }
+  }]);
+
+  return TPre_;
+}(TP_);
+
+T.Pre_ = TPre_;
+T.Pre = new TPre_();
 
 // inline widgets
 //---------------
@@ -12489,13 +12721,13 @@ var TSpan_ = function (_TWidget_4) {
   function TSpan_(name, desc) {
     _classCallCheck(this, TSpan_);
 
-    var _this23 = _possibleConstructorReturn(this, (TSpan_.__proto__ || Object.getPrototypeOf(TSpan_)).call(this, name || 'Span', desc));
+    var _this24 = _possibleConstructorReturn(this, (TSpan_.__proto__ || Object.getPrototypeOf(TSpan_)).call(this, name || 'Span', desc));
 
-    _this23._statedProp = [];
-    _this23._silentProp = ['className', 'hookTo.', 'keyid.', 'childInline.', 'tagName.'];
-    _this23._defaultProp = { width: undefined, height: undefined }; // 'html.' default is not passed, suggest not use width/height, but if used also OK // undefined means remove all none-number when saving
-    _this23._htmlText = true; // use 'html.'
-    return _this23;
+    _this24._statedProp = [];
+    _this24._silentProp = ['className', 'hookTo.', 'keyid.', 'childInline.', 'tagName.'];
+    _this24._defaultProp = { width: undefined, height: undefined }; // 'html.' default is not passed, suggest not use width/height, but if used also OK // undefined means remove all none-number when saving
+    _this24._htmlText = true; // use 'html.'
+    return _this24;
   }
 
   _createClass2(TSpan_, [{
@@ -12516,7 +12748,7 @@ var TSpan_ = function (_TWidget_4) {
       var template = this.getShadowTemplate();
       Object.defineProperty(this, '_', { enumerable: false, configurable: false, writable: false, value: template });
       this.isHooked = false; // like this.isMounted(), but can used in render()
-      this.hideThis = false;
+      this['hide.'] = false;
 
       if (W.__debug__ && utils.widgetNum() == 0) {
         utils.instantShow('error: inline widget can not be used as topmost panel.');
@@ -12609,11 +12841,9 @@ var TSpan_ = function (_TWidget_4) {
             }
 
             var item2 = item.slice(1);
-            if (item2 == 'id__') {
-              // pass setter by props.$id__
+            if (item2 == 'id__') // pass setter by props.$id__
               dualIdSetter = itemValue; // will bind this in defineDual('id__')
-              gui.hasIdSetter = true;
-            } else this[item] = currEvSet[item2] = itemValue.bind(this);
+            else this[item] = currEvSet[item2] = bindable_(itemValue) ? itemValue.bind(this) : itemValue;
           }
           // else ignore  // $XX only can be string or function, ignore others
         } else {
@@ -12693,7 +12923,14 @@ var TSpan_ = function (_TWidget_4) {
         this.state.klass = value || '';
       });
       this.defineDual('style', function (value, oldValue) {
-        this.state.style = Object.assign({}, oldValue, value);
+        if (!this.state['tagName.']) {
+          // current is virtual node
+          var b = utils.eachComponent(this),
+              childComp = b[0];
+          if (childComp) childComp.duals.style = value;
+        } else {
+          this.state.style = Object.assign({}, oldValue, value);
+        }
       });
       this.defineDual('html.', function (value, oldValue) {
         this.state['html.'] = value || null;
@@ -12702,7 +12939,7 @@ var TSpan_ = function (_TWidget_4) {
         this.state.id__ = value; // is first render when oldValue == 0
         gui.id__ = gui.id2__ = value;
       });
-      if (dualIdSetter) this.defineDual('id__', dualIdSetter);
+      if (dualIdSetter) this.defineDual('id__', dualIdSetter); // will auto set: gui.hasIdSetter = true
 
       this.defineDual('trigger', triggerExprFn_);
 
@@ -12829,7 +13066,7 @@ var TSpan_ = function (_TWidget_4) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return reactCreate_('span', displayNoneProp_);
+      if (this['hide.']) return reactCreate_('span', displayNoneProp_);
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -12889,7 +13126,7 @@ var THiddenSpan_ = function (_TSpan_2) {
     key: 'getInitialState',
     value: function getInitialState() {
       var dState = _get(THiddenSpan_.prototype.__proto__ || Object.getPrototypeOf(THiddenSpan_.prototype), 'getInitialState', this).call(this);
-      this.hideThis = true;
+      if (!W.__design__) this.duals.style = { display: 'none' };
       return dState;
     }
   }]);
@@ -12906,10 +13143,10 @@ var TBr_ = function (_TSpan_3) {
   function TBr_(name, desc) {
     _classCallCheck(this, TBr_);
 
-    var _this26 = _possibleConstructorReturn(this, (TBr_.__proto__ || Object.getPrototypeOf(TBr_)).call(this, name || 'Br', desc));
+    var _this27 = _possibleConstructorReturn(this, (TBr_.__proto__ || Object.getPrototypeOf(TBr_)).call(this, name || 'Br', desc));
 
-    _this26._htmlText = false;
-    return _this26;
+    _this27._htmlText = false;
+    return _this27;
   }
 
   _createClass2(TBr_, [{
@@ -13010,10 +13247,10 @@ var TAudio_ = function (_TSpan_5) {
       iLevel = iLevel || 1200;
       var dSchema = _get(TAudio_.prototype.__proto__ || Object.getPrototypeOf(TAudio_.prototype), '_getSchema', this).call(this, self, iLevel + 200);
       dSchema.src = [iLevel + 1, 'string', null];
-      dSchema.autoPlay = [iLevel + 2, 'string', ['', 'autoplay']];
-      dSchema.controls = [iLevel + 3, 'string', ['', 'controls']];
-      dSchema.loop = [iLevel + 4, 'string', ['', 'loop']];
-      dSchema.muted = [iLevel + 5, 'string', ['', 'muted']];
+      dSchema.autoPlay = [iLevel + 2, 'string', ['', '1']];
+      dSchema.controls = [iLevel + 3, 'string', ['', '1']];
+      dSchema.loop = [iLevel + 4, 'string', ['', '1']];
+      dSchema.muted = [iLevel + 5, 'string', ['', '1']];
       dSchema.preload = [iLevel + 6, 'string', ['auto', 'meta', 'none']];
       return dSchema;
     }
@@ -13070,8 +13307,8 @@ var TTextarea_ = function (_TSpan_6) {
     value: function _getSchema(self, iLevel) {
       iLevel = iLevel || 1200;
       var dSchema = _get(TTextarea_.prototype.__proto__ || Object.getPrototypeOf(TTextarea_.prototype), '_getSchema', this).call(this, self, iLevel + 200);
-      dSchema.disabled = [iLevel + 1, 'string', ['', 'disabled']];
-      dSchema.readonly = [iLevel + 2, 'string', ['', 'readonly']];
+      dSchema.disabled = [iLevel + 1, 'string', ['', '1']];
+      dSchema.readonly = [iLevel + 2, 'string', ['', '1']];
       dSchema.placeholder = [iLevel + 3, 'string'];
       return dSchema;
     }
@@ -13145,10 +13382,10 @@ var TImg_ = function (_TSpan_8) {
   function TImg_(name, desc) {
     _classCallCheck(this, TImg_);
 
-    var _this31 = _possibleConstructorReturn(this, (TImg_.__proto__ || Object.getPrototypeOf(TImg_)).call(this, name || 'Img', desc));
+    var _this32 = _possibleConstructorReturn(this, (TImg_.__proto__ || Object.getPrototypeOf(TImg_)).call(this, name || 'Img', desc));
 
-    _this31._htmlText = false;
-    return _this31;
+    _this32._htmlText = false;
+    return _this32;
   }
 
   _createClass2(TImg_, [{
@@ -13225,10 +13462,10 @@ var TInput_ = function (_TSpan_10) {
   function TInput_(name, desc) {
     _classCallCheck(this, TInput_);
 
-    var _this33 = _possibleConstructorReturn(this, (TInput_.__proto__ || Object.getPrototypeOf(TInput_)).call(this, name || 'Input', desc));
+    var _this34 = _possibleConstructorReturn(this, (TInput_.__proto__ || Object.getPrototypeOf(TInput_)).call(this, name || 'Input', desc));
 
-    _this33._htmlText = false;
-    return _this33;
+    _this34._htmlText = false;
+    return _this34;
   }
 
   _createClass2(TInput_, [{
@@ -13238,9 +13475,9 @@ var TInput_ = function (_TSpan_10) {
       var dSchema = _get(TInput_.prototype.__proto__ || Object.getPrototypeOf(TInput_.prototype), '_getSchema', this).call(this, self, iLevel + 200);
       Object.assign(dSchema, {
         type: [iLevel + 1, 'string', ['text', 'button', 'checkbox', 'file', 'hidden', 'image', 'password', 'radio', 'reset', 'submit', 'color', 'date', 'datetime', 'datetime-local', 'email', 'month', 'number', 'range', 'search', 'tel', 'time', 'url', 'week']],
-        checked: [iLevel + 2, 'string', ['', 'checked']],
-        disabled: [iLevel + 3, 'string', ['', 'disabled']],
-        readonly: [iLevel + 4, 'string', ['', 'readonly']],
+        checked: [iLevel + 2, 'string', ['', '1']],
+        disabled: [iLevel + 3, 'string', ['', '1']],
+        readonly: [iLevel + 4, 'string', ['', '1']],
         value: [iLevel + 5, 'string'],
         placeholder: [iLevel + 6, 'string'],
         min: [iLevel + 7, 'string'],
@@ -13271,6 +13508,10 @@ var TInput_ = function (_TSpan_10) {
       if (sType === 'checkbox' || sType === 'radio') {
         var initChecked = this.props.checked !== undefined ? boolToStr_(this.props.checked) : boolToStr_(this.props.defaultChecked);
         this.defineDual('checked', null, initChecked);
+      } else if (sType == 'select' && this.props.multiple) {
+        var initValue = this.props.value || this.props.defaultValue;
+        if (!Array.isArray(initValue)) initValue = [];
+        this.defineDual('value', null, initValue);
       } else {
         var initValue = this.props.value !== undefined ? this.props.value || '' : this.props.defaultValue || '';
         this.defineDual('value', null, initValue);
@@ -13281,8 +13522,18 @@ var TInput_ = function (_TSpan_10) {
   }, {
     key: '$$onChange',
     value: function $$onChange(event) {
-      var sType = this.props.type;
-      if (sType === 'checkbox' || sType === 'radio') this.duals.checked = event.target.checked;else this.duals.value = event.target.value;
+      var sType = this.props.type,
+          targ = event.target;
+      if (sType === 'checkbox' || sType === 'radio') this.duals.checked = targ.checked;else if (sType == 'select' && this.props.multiple) {
+        var values = [],
+            options = targ.options,
+            len = options && options.length || 0;
+        for (var i = 0; i < len; i++) {
+          if (options[i].selected) values.push(options[i].value);
+        }
+        this.duals.value = values;
+      } else this.duals.value = targ.value;
+
       if (this.$onChange) this.$onChange(event);
     }
   }]);
@@ -13349,8 +13600,8 @@ var TSelect_ = function (_TSpan_12) {
     value: function _getSchema(self, iLevel) {
       iLevel = iLevel || 1200;
       var dSchema = _get(TSelect_.prototype.__proto__ || Object.getPrototypeOf(TSelect_.prototype), '_getSchema', this).call(this, self, iLevel + 200);
-      dSchema.multiple = [iLevel + 1, 'string', ['', 'multiple']];
-      dSchema.disabled = [iLevel + 2, 'string', ['', 'disabled']];
+      dSchema.multiple = [iLevel + 1, 'string', ['', '1']];
+      dSchema.disabled = [iLevel + 2, 'string', ['', '1']];
       return dSchema;
     }
   }, {
@@ -13365,15 +13616,44 @@ var TSelect_ = function (_TSpan_12) {
     value: function getInitialState() {
       var dState = _get(TSelect_.prototype.__proto__ || Object.getPrototypeOf(TSelect_.prototype), 'getInitialState', this).call(this);
 
-      var initValue = this.props.value !== undefined ? this.props.value || '' : this.props.defaultValue || '';
+      var initValue;
+      if (this.props.multiple) {
+        initValue = this.props.value || this.props.defaultValue;
+        if (!Array.isArray(initValue)) initValue = [];
+      } else {
+        initValue = this.props.value !== undefined ? this.props.value || '' : this.props.defaultValue || '';
+      }
       this.defineDual('value', null, initValue);
 
       return dState;
     }
   }, {
+    key: 'componentDidMount',
+    value: function componentDidMount() {
+      _get(TSelect_.prototype.__proto__ || Object.getPrototypeOf(TSelect_.prototype), 'componentDidMount', this).call(this);
+
+      if (!this.props.multiple && !this.state.value) {
+        var s,
+            node = this.getHtmlNode();
+        if (node && (s = node.value)) // try sync from GUI default
+          this.duals.value = s;
+      }
+      // else, GUI will set by this.duals.value what ever this.props.multiple
+    }
+  }, {
     key: '$$onChange',
     value: function $$onChange(event) {
-      this.duals.value = event.target.value;
+      var node = event.target;
+      if (this.props.multiple) {
+        var values = [],
+            options = node.options,
+            len = options.length;
+        for (var i = 0; i < len; i++) {
+          if (options[i].selected) values.push(options[i].value);
+        }
+        this.duals.value = values;
+      } else this.duals.value = node.value;
+
       if (this.$onChange) this.$onChange(event);
     }
   }]);
@@ -13402,7 +13682,7 @@ var TOptgroup_ = function (_TSpan_13) {
       iLevel = iLevel || 1200;
       var dSchema = _get(TOptgroup_.prototype.__proto__ || Object.getPrototypeOf(TOptgroup_.prototype), '_getSchema', this).call(this, self, iLevel + 200);
       dSchema.label = [iLevel + 1, 'string'];
-      dSchema.disabled = [iLevel + 2, 'string', ['', 'disabled']];
+      dSchema.disabled = [iLevel + 2, 'string', ['', '1']];
       return dSchema;
     }
   }, {
@@ -13422,6 +13702,7 @@ T.Optgroup = new TOptgroup_();
 
 T.Option_ = simpleExtends(TSpan_, 'Option');
 T.Option = new T.Option_();
+
 T.B_ = simpleExtends(TSpan_, 'B');
 T.B = new T.B_();
 T.I_ = simpleExtends(TSpan_, 'I');
@@ -13514,6 +13795,7 @@ T.Rt = new T.Rt_();
 function navSetChecked_(comp, checkedId, callback) {
   var gui = comp.$gui;
   if (checkedId && gui.compState) {
+    // if compState == 0, not ready yet
     var navKey = gui.navSubkey;
     var oldId = comp.state.checkedId;
     if (gui.navItems[checkedId]) {
@@ -13557,13 +13839,8 @@ function navSetChecked_(comp, checkedId, callback) {
   }
 
   function setAndTrigger(sOld, sNew) {
-    comp.state.checkedId = sNew;
-    var bConn = gui.connectTo['checkedId'];
-    if (bConn && gui.compState >= 2) {
-      setTimeout(function () {
-        triggerConnTo_(bConn, sNew, sOld, 'checkedId');
-      }, 0);
-    }
+    comp.state.checkedId = sNew; // avoid using duals.checkedId = xx
+    triggerDual_(comp, 'checkedId', sOld);
   }
 }
 
@@ -13573,10 +13850,10 @@ var TNavPanel_ = function (_TPanel_3) {
   function TNavPanel_(name, desc) {
     _classCallCheck(this, TNavPanel_);
 
-    var _this38 = _possibleConstructorReturn(this, (TNavPanel_.__proto__ || Object.getPrototypeOf(TNavPanel_)).call(this, name || 'NavPanel', desc));
+    var _this39 = _possibleConstructorReturn(this, (TNavPanel_.__proto__ || Object.getPrototypeOf(TNavPanel_)).call(this, name || 'NavPanel', desc));
 
-    _this38._silentProp.push('isNavigator.');
-    return _this38;
+    _this39._silentProp.push('isNavigator.');
+    return _this39;
   }
 
   _createClass2(TNavPanel_, [{
@@ -13752,7 +14029,7 @@ var TNavPanel_ = function (_TPanel_3) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -13844,11 +14121,11 @@ var TNavDiv_ = function (_TNavPanel_) {
     _classCallCheck(this, TNavDiv_);
 
     // this._silentProp.push('isNavigator.'); // has defined in base class
-    var _this39 = _possibleConstructorReturn(this, (TNavDiv_.__proto__ || Object.getPrototypeOf(TNavDiv_)).call(this, name || 'NavDiv', desc));
+    var _this40 = _possibleConstructorReturn(this, (TNavDiv_.__proto__ || Object.getPrototypeOf(TNavDiv_)).call(this, name || 'NavDiv', desc));
 
-    _this39._defaultProp.height = null;
-    _this39._defaultProp.minHeight = 20;
-    return _this39;
+    _this40._defaultProp.height = null;
+    _this40._defaultProp.minHeight = 20;
+    return _this40;
   }
 
   _createClass2(TNavDiv_, [{
@@ -13872,7 +14149,7 @@ T.NavDiv = new TNavDiv_();
 
 function designRenderGround(obj, iGroundId) {
   syncProps_(obj);
-  if (obj.hideThis) return null; // as <noscript>
+  if (obj['hide.']) return null; // as <noscript>
 
   var sTag = obj.state['tagName.'];
   if (!sTag) return getOnlyChild_(obj);
@@ -13910,12 +14187,12 @@ var TGroundPanel_ = function (_TPanel_4) {
   function TGroundPanel_(name, desc) {
     _classCallCheck(this, TGroundPanel_);
 
-    var _this40 = _possibleConstructorReturn(this, (TGroundPanel_.__proto__ || Object.getPrototypeOf(TGroundPanel_)).call(this, name || 'GroundPanel', desc));
+    var _this41 = _possibleConstructorReturn(this, (TGroundPanel_.__proto__ || Object.getPrototypeOf(TGroundPanel_)).call(this, name || 'GroundPanel', desc));
 
-    _this40._silentProp.push('isPlayground.');
-    _this40._defaultProp.height = null;
-    _this40._defaultProp.minHeight = 20;
-    return _this40;
+    _this41._silentProp.push('isPlayground.');
+    _this41._defaultProp.height = null;
+    _this41._defaultProp.minHeight = 20;
+    return _this41;
   }
 
   _createClass2(TGroundPanel_, [{
@@ -13947,13 +14224,13 @@ var TGroundDiv_ = function (_TUnit_5) {
   function TGroundDiv_(name, desc) {
     _classCallCheck(this, TGroundDiv_);
 
-    var _this41 = _possibleConstructorReturn(this, (TGroundDiv_.__proto__ || Object.getPrototypeOf(TGroundDiv_)).call(this, name || 'GroundDiv', desc));
+    var _this42 = _possibleConstructorReturn(this, (TGroundDiv_.__proto__ || Object.getPrototypeOf(TGroundDiv_)).call(this, name || 'GroundDiv', desc));
 
-    _this41._silentProp.push('isPlayground.');
-    _this41._defaultProp.height = null;
-    _this41._defaultProp.minHeight = 20;
-    _this41._htmlText = true;
-    return _this41;
+    _this42._silentProp.push('isPlayground.');
+    _this42._defaultProp.height = null;
+    _this42._defaultProp.minHeight = 20;
+    _this42._htmlText = true;
+    return _this42;
   }
 
   _createClass2(TGroundDiv_, [{
@@ -13986,7 +14263,7 @@ var TGroundDiv_ = function (_TUnit_5) {
     value: function render() {
       if (W.__design__) return designRenderGround(this, 2);else {
         syncProps_(this);
-        if (this.hideThis) return null; // as <noscript>
+        if (this['hide.']) return null; // as <noscript>
 
         var sTag = this.state['tagName.'];
         if (!sTag) return getOnlyChild_(this);
@@ -14078,12 +14355,17 @@ function setOptChecked_(self, callback, newOpt, isForce) {
     if (callback) callback();
   }
 
+  var recheckable = self.state.recheckable;
+  var currChecked = self.state['data-checked'];
+
   var popOption = self.state.popOption;
   if (popOption) {
     if (!popOption.state || !popOption.state.opened) {
-      optPopWindow_(self, popOption, newOpt, function (succ) {
-        if (callback) callback();
-      });
+      if (recheckable || !currChecked) {
+        optPopWindow_(self, popOption, newOpt, function (succ) {
+          if (callback) callback();
+        });
+      }
       return;
     } else {
       // popOption.state.opened, fired by duals['data-checked'] = '1'
@@ -14091,13 +14373,12 @@ function setOptChecked_(self, callback, newOpt, isForce) {
     }
   }
 
-  if (!self.state['data-checked']) {
+  if (!currChecked) {
     self.duals['data-checked'] = '1'; // redirect to duals['data-checked'] = '1'
     if (callback) delayCallback([100, 100, 100]); // max wait 300 ms, if not ready force callback
     return;
   }
 
-  var recheckable = self.state.recheckable;
   if (recheckable) {
     self.state.recheckable = false; // avoid re-enter
     setTimeout(function () {
@@ -14136,15 +14417,18 @@ function setOptChecked_(self, callback, newOpt, isForce) {
 }
 
 function defineOptDual_(self, state) {
-  state.isolated = '';
+  var beTrigger = boolToStr_(self.props.$trigger || self.props.popOption);
   self.defineDual('isolated', function (value, oldValue) {
     this.state.isolated = boolToStr_(value);
-  });
+  }); // default is undefined
+  if (self.props.isolated === undefined) self.duals.isolated = beTrigger; // if use as trigger, try default isolated
+  // else, will auto assign from props.isolated 
 
-  state.recheckable = '';
   self.defineDual('recheckable', function (value, oldValue) {
     this.state.recheckable = boolToStr_(value);
-  });
+  }); // default is undefined
+  if (self.props.recheckable === undefined) self.duals.recheckable = beTrigger; // if use as trigger, try default recheckable
+  // else, will auto assign from props.recheckable 
 
   state.disabled = '';
   self.defineDual('disabled', function (value, oldValue) {
@@ -14184,12 +14468,12 @@ var TOptSpan_ = function (_TSpan_15) {
   function TOptSpan_(name, desc) {
     _classCallCheck(this, TOptSpan_);
 
-    var _this42 = _possibleConstructorReturn(this, (TOptSpan_.__proto__ || Object.getPrototypeOf(TOptSpan_)).call(this, name || 'OptSpan', desc));
+    var _this43 = _possibleConstructorReturn(this, (TOptSpan_.__proto__ || Object.getPrototypeOf(TOptSpan_)).call(this, name || 'OptSpan', desc));
 
-    _this42._statedProp.push('data-checked');
-    _this42._silentProp.push('isOption.');
-    _this42._defaultProp['data-checked'] = '';
-    return _this42;
+    _this43._statedProp.push('data-checked');
+    _this43._silentProp.push('isOption.');
+    _this43._defaultProp['data-checked'] = '';
+    return _this43;
   }
 
   _createClass2(TOptSpan_, [{
@@ -14289,10 +14573,10 @@ var TOptImg_ = function (_TOptSpan_2) {
   function TOptImg_(name, desc) {
     _classCallCheck(this, TOptImg_);
 
-    var _this44 = _possibleConstructorReturn(this, (TOptImg_.__proto__ || Object.getPrototypeOf(TOptImg_)).call(this, name || 'OptImg', desc));
+    var _this45 = _possibleConstructorReturn(this, (TOptImg_.__proto__ || Object.getPrototypeOf(TOptImg_)).call(this, name || 'OptImg', desc));
 
-    _this44._htmlText = false;
-    return _this44;
+    _this45._htmlText = false;
+    return _this45;
   }
 
   _createClass2(TOptImg_, [{
@@ -14340,10 +14624,10 @@ var TOptOption_ = function (_TOptSpan_4) {
   function TOptOption_(name, desc) {
     _classCallCheck(this, TOptOption_);
 
-    var _this46 = _possibleConstructorReturn(this, (TOptOption_.__proto__ || Object.getPrototypeOf(TOptOption_)).call(this, name || 'OptOption', desc));
+    var _this47 = _possibleConstructorReturn(this, (TOptOption_.__proto__ || Object.getPrototypeOf(TOptOption_)).call(this, name || 'OptOption', desc));
 
-    _this46._silentProp.push('selected'); // not save 'selected', suggest only using 'data-checked'
-    return _this46;
+    _this47._silentProp.push('selected'); // not save 'selected', suggest only using 'data-checked'
+    return _this47;
   }
 
   _createClass2(TOptOption_, [{
@@ -14356,10 +14640,45 @@ var TOptOption_ = function (_TOptSpan_4) {
       return dSchema;
     }
   }, {
+    key: 'getDefaultProps',
+    value: function getDefaultProps() {
+      var dProp = _get(TOptOption_.prototype.__proto__ || Object.getPrototypeOf(TOptOption_.prototype), 'getDefaultProps', this).call(this);
+      dProp['tagName.'] = 'option';
+      return dProp;
+    }
+  }, {
     key: 'getInitialState',
     value: function getInitialState() {
       var dState = _get(TOptOption_.prototype.__proto__ || Object.getPrototypeOf(TOptOption_.prototype), 'getInitialState', this).call(this),
           gui = this.$gui;
+
+      var ownerComp = this.parentOf(true);
+      if (ownerComp) {
+        if (ownerComp.props['tagName.'] == 'optgroup') ownerComp = ownerComp.parentOf(true);
+
+        if (ownerComp && ownerComp.props['tagName.'] == 'select') {
+          // under control
+          if (ownerComp.props.multiple) {
+            console.log('error: can not use OptOption in multiple "select"');
+            ownerComp = null;
+          } else {
+            ownerComp.listen('value', function (value, oldValue) {
+              if (!this.isHooked) return;
+              this.$gui.syncSelect();
+            }.bind(this));
+          }
+        } else ownerComp = null;
+      }
+
+      this.$gui.syncSelect = function () {
+        if (!ownerComp) return;
+        if (this.state.disabled) return;
+
+        var thisValue = this.state.value;
+        if (!thisValue) return; // invalid
+
+        this.duals['data-checked'] = boolToStr_(thisValue === ownerComp.state.value);
+      }.bind(this);
 
       this.defineDual('data-checked', function (value, oldValue) {
         var sValue = boolToStr_(value);
@@ -14368,17 +14687,29 @@ var TOptOption_ = function (_TOptSpan_4) {
         var self = this;
         setTimeout(function () {
           var node = self.getHtmlNode();
-          if (node) node.selected = !!value; // maybe no duals.selected, synchorized here
+          if (node) {
+            node.selected = !!sValue;
+            if (sValue && ownerComp) {
+              var selfValue = self.state.value;
+              if (selfValue) // need fire ownerComp.duals.value, it not auto fired by ownerComp.onChange
+                ownerComp.duals.value = selfValue;
+            }
+          }
         }, 0);
       });
       return dState;
     }
   }, {
-    key: 'getDefaultProps',
-    value: function getDefaultProps() {
-      var dProp = _get(TOptOption_.prototype.__proto__ || Object.getPrototypeOf(TOptOption_.prototype), 'getDefaultProps', this).call(this);
-      dProp['tagName.'] = 'option';
-      return dProp;
+    key: 'componentDidMount',
+    value: function componentDidMount() {
+      _get(TOptOption_.prototype.__proto__ || Object.getPrototypeOf(TOptOption_.prototype), 'componentDidMount', this).call(this);
+      this.$gui.syncSelect();
+    }
+  }, {
+    key: '$$onClick',
+    value: function $$onClick(event) {
+      // overwrite super.$$onClick
+      if (this.$onClick) this.$onClick(event);
     }
   }]);
 
@@ -14394,12 +14725,12 @@ var TOptDiv_ = function (_TDiv_3) {
   function TOptDiv_(name, desc) {
     _classCallCheck(this, TOptDiv_);
 
-    var _this47 = _possibleConstructorReturn(this, (TOptDiv_.__proto__ || Object.getPrototypeOf(TOptDiv_)).call(this, name || 'OptDiv', desc));
+    var _this48 = _possibleConstructorReturn(this, (TOptDiv_.__proto__ || Object.getPrototypeOf(TOptDiv_)).call(this, name || 'OptDiv', desc));
 
-    _this47._statedProp.push('data-checked');
-    _this47._silentProp.push('isOption.');
-    _this47._defaultProp['data-checked'] = '';
-    return _this47;
+    _this48._statedProp.push('data-checked');
+    _this48._silentProp.push('isOption.');
+    _this48._defaultProp['data-checked'] = '';
+    return _this48;
   }
 
   _createClass2(TOptDiv_, [{
@@ -14463,18 +14794,18 @@ var TOptDiv_ = function (_TDiv_3) {
 T.OptDiv_ = TOptDiv_;
 T.OptDiv = new TOptDiv_();
 
-var TOptLi_ = function (_TP_9) {
-  _inherits(TOptLi_, _TP_9);
+var TOptLi_ = function (_TP_10) {
+  _inherits(TOptLi_, _TP_10);
 
   function TOptLi_(name, desc) {
     _classCallCheck(this, TOptLi_);
 
-    var _this48 = _possibleConstructorReturn(this, (TOptLi_.__proto__ || Object.getPrototypeOf(TOptLi_)).call(this, name || 'OptLi', desc));
+    var _this49 = _possibleConstructorReturn(this, (TOptLi_.__proto__ || Object.getPrototypeOf(TOptLi_)).call(this, name || 'OptLi', desc));
 
-    _this48._statedProp.push('data-checked');
-    _this48._silentProp.push('isOption.');
-    _this48._defaultProp['data-checked'] = '';
-    return _this48;
+    _this49._statedProp.push('data-checked');
+    _this49._silentProp.push('isOption.');
+    _this49._defaultProp['data-checked'] = '';
+    return _this49;
   }
 
   _createClass2(TOptLi_, [{
@@ -14544,11 +14875,11 @@ var TOptInput_ = function (_TOptSpan_5) {
   function TOptInput_(name, desc) {
     _classCallCheck(this, TOptInput_);
 
-    var _this49 = _possibleConstructorReturn(this, (TOptInput_.__proto__ || Object.getPrototypeOf(TOptInput_)).call(this, name || 'OptInput', desc)); // input.type: checkbox radio button image reset submit
+    var _this50 = _possibleConstructorReturn(this, (TOptInput_.__proto__ || Object.getPrototypeOf(TOptInput_)).call(this, name || 'OptInput', desc)); // input.type: checkbox radio button image reset submit
 
 
-    _this49._htmlText = false;
-    return _this49;
+    _this50._htmlText = false;
+    return _this50;
   }
 
   _createClass2(TOptInput_, [{
@@ -14806,10 +15137,10 @@ var TTempPanel_ = function (_TPanel_5) {
   function TTempPanel_(name, desc) {
     _classCallCheck(this, TTempPanel_);
 
-    var _this50 = _possibleConstructorReturn(this, (TTempPanel_.__proto__ || Object.getPrototypeOf(TTempPanel_)).call(this, name || 'TempPanel', desc));
+    var _this51 = _possibleConstructorReturn(this, (TTempPanel_.__proto__ || Object.getPrototypeOf(TTempPanel_)).call(this, name || 'TempPanel', desc));
 
-    _this50._silentProp.push('isTemplate.', 'data-temp.type');
-    return _this50;
+    _this51._silentProp.push('isTemplate.', 'data-temp.type');
+    return _this51;
   }
 
   _createClass2(TTempPanel_, [{
@@ -14862,7 +15193,7 @@ var TTempPanel_ = function (_TPanel_5) {
         return _get(TTempPanel_.prototype.__proto__ || Object.getPrototypeOf(TTempPanel_.prototype), 'render', this).call(this);
       } else {
         syncProps_(this);
-        if (this.hideThis) return null; // as <noscript>
+        if (this['hide.']) return null; // as <noscript>
 
         var sTag = this.state['tagName.'];
         if (!sTag) return getOnlyChild_(this);
@@ -14886,11 +15217,11 @@ var TTempDiv_ = function (_TUnit_6) {
   function TTempDiv_(name, desc) {
     _classCallCheck(this, TTempDiv_);
 
-    var _this51 = _possibleConstructorReturn(this, (TTempDiv_.__proto__ || Object.getPrototypeOf(TTempDiv_)).call(this, name || 'TempDiv', desc));
+    var _this52 = _possibleConstructorReturn(this, (TTempDiv_.__proto__ || Object.getPrototypeOf(TTempDiv_)).call(this, name || 'TempDiv', desc));
 
-    _this51._silentProp.push('isTemplate.', 'data-temp.type');
-    _this51._htmlText = true;
-    return _this51;
+    _this52._silentProp.push('isTemplate.', 'data-temp.type');
+    _this52._htmlText = true;
+    return _this52;
   }
 
   _createClass2(TTempDiv_, [{
@@ -14944,7 +15275,7 @@ var TTempDiv_ = function (_TUnit_6) {
     value: function render() {
       if (W.__design__ && !this.isLibGui) return _get(TTempDiv_.prototype.__proto__ || Object.getPrototypeOf(TTempDiv_.prototype), 'render', this).call(this);else {
         syncProps_(this);
-        if (this.hideThis) return null; // as <noscript>
+        if (this['hide.']) return null; // as <noscript>
 
         var sTag = this.state['tagName.'];
         if (!sTag) return getOnlyChild_(this);
@@ -14968,10 +15299,10 @@ var TTempSpan_ = function (_TSpan_16) {
   function TTempSpan_(name, desc) {
     _classCallCheck(this, TTempSpan_);
 
-    var _this52 = _possibleConstructorReturn(this, (TTempSpan_.__proto__ || Object.getPrototypeOf(TTempSpan_)).call(this, name || 'TempSpan', desc));
+    var _this53 = _possibleConstructorReturn(this, (TTempSpan_.__proto__ || Object.getPrototypeOf(TTempSpan_)).call(this, name || 'TempSpan', desc));
 
-    _this52._silentProp.push('isTemplate.', 'data-temp.type');
-    return _this52;
+    _this53._silentProp.push('isTemplate.', 'data-temp.type');
+    return _this53;
   }
 
   _createClass2(TTempSpan_, [{
@@ -15011,7 +15342,7 @@ var TTempSpan_ = function (_TSpan_16) {
     value: function render() {
       if (W.__design__) return _get(TTempSpan_.prototype.__proto__ || Object.getPrototypeOf(TTempSpan_.prototype), 'render', this).call(this);else {
         syncProps_(this);
-        if (this.hideThis) return reactCreate_('span', displayNoneProp_);
+        if (this['hide.']) return reactCreate_('span', displayNoneProp_);
 
         var sTag = this.state['tagName.'];
         if (!sTag) return getOnlyChild_(this);
@@ -15035,11 +15366,11 @@ var TRefDiv_ = function (_TUnit_7) {
   function TRefDiv_(name, desc) {
     _classCallCheck(this, TRefDiv_);
 
-    var _this53 = _possibleConstructorReturn(this, (TRefDiv_.__proto__ || Object.getPrototypeOf(TRefDiv_)).call(this, name || 'RefDiv', desc));
+    var _this54 = _possibleConstructorReturn(this, (TRefDiv_.__proto__ || Object.getPrototypeOf(TRefDiv_)).call(this, name || 'RefDiv', desc));
 
-    _this53._silentProp.push('isReference.');
-    _this53._htmlText = true;
-    return _this53;
+    _this54._silentProp.push('isReference.');
+    _this54._htmlText = true;
+    return _this54;
   }
 
   _createClass2(TRefDiv_, [{
@@ -15073,10 +15404,10 @@ var TRefDiv_ = function (_TUnit_7) {
   }, {
     key: 'render',
     value: function render() {
-      // no need call syncProps_(this) and ignore this.hideThis
+      // no need call syncProps_(this) and ignore this['hide.']
       // 'tagName.' should fixed to 'div'
 
-      var sCls = classNameOf(this);
+      var sCls = classNameOf_(this);
       var dProp = { style: { width: '0px', height: '0px' } };
       if (sCls) dProp.className = sCls;
       return reactCreate_('div', dProp);
@@ -15096,10 +15427,10 @@ var TRefSpan_ = function (_TSpan_17) {
   function TRefSpan_(name, desc) {
     _classCallCheck(this, TRefSpan_);
 
-    var _this54 = _possibleConstructorReturn(this, (TRefSpan_.__proto__ || Object.getPrototypeOf(TRefSpan_)).call(this, name || 'RefSpan', desc));
+    var _this55 = _possibleConstructorReturn(this, (TRefSpan_.__proto__ || Object.getPrototypeOf(TRefSpan_)).call(this, name || 'RefSpan', desc));
 
-    _this54._silentProp.push('isReference.');
-    return _this54;
+    _this55._silentProp.push('isReference.');
+    return _this55;
   }
 
   _createClass2(TRefSpan_, [{
@@ -15131,10 +15462,10 @@ var TRefSpan_ = function (_TSpan_17) {
   }, {
     key: 'render',
     value: function render() {
-      // no need call syncProps_(this) and ignore this.hideThis
+      // no need call syncProps_(this) and ignore this['hide.']
       // 'tagName.' should fixed to 'span'
 
-      var sCls = classNameOf(this);
+      var sCls = classNameOf_(this);
       var dProp = { style: { width: '0px', height: '0px' } };
       if (sCls) dProp.className = sCls;
       return reactCreate_('span', dProp);
@@ -15157,11 +15488,11 @@ var TScenePage_ = function (_TPanel_6) {
   function TScenePage_(name, desc) {
     _classCallCheck(this, TScenePage_);
 
-    var _this55 = _possibleConstructorReturn(this, (TScenePage_.__proto__ || Object.getPrototypeOf(TScenePage_)).call(this, name || 'ScenePage', desc));
+    var _this56 = _possibleConstructorReturn(this, (TScenePage_.__proto__ || Object.getPrototypeOf(TScenePage_)).call(this, name || 'ScenePage', desc));
 
-    _this55._silentProp.push('isScenePage.', 'isTemplate.');
-    _this55._defaultProp.noShow = '';
-    return _this55;
+    _this56._silentProp.push('isScenePage.', 'isTemplate.');
+    _this56._defaultProp.noShow = '';
+    return _this56;
   }
 
   _createClass2(TScenePage_, [{
@@ -15272,7 +15603,7 @@ var TScenePage_ = function (_TPanel_6) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -15326,6 +15657,13 @@ var TMaskPanel_ = function (_TPanel_7) {
   }
 
   _createClass2(TMaskPanel_, [{
+    key: 'getDefaultProps',
+    value: function getDefaultProps() {
+      var dProp = _get(TMaskPanel_.prototype.__proto__ || Object.getPrototypeOf(TMaskPanel_.prototype), 'getDefaultProps', this).call(this);
+      dProp.klass = 'noselect-txt';
+      return dProp;
+    }
+  }, {
     key: 'getInitialState',
     value: function getInitialState() {
       var dState = _get(TMaskPanel_.prototype.__proto__ || Object.getPrototypeOf(TMaskPanel_.prototype), 'getInitialState', this).call(this); // this.props['hookTo.'] must be W.body.$pop
@@ -15442,7 +15780,7 @@ var TMaskPanel_ = function (_TPanel_7) {
                 utils.popWin.popWindow(); // retData=undefined, callback=undefined
               }, 100);
             },
-            $onDblClick: noPropagation,
+            $onDoubleClick: noPropagation,
             $onMouseDown: noPropagation, $onMouseMove: noPropagation, $onMouseUp: noPropagation,
             $onKeyPress: noPropagation, $onKeyDown: noPropagation, $onKeyUp: noPropagation,
             $onDragOver: noPropagation, $onDrop: noPropagation
@@ -15751,7 +16089,10 @@ function renewMarkdown_(compObj, mdText, callback) {
                 regNode.push(regSub); // regSub maybe is []
                 regSub = [];
               }
-            } else bList.push(node);
+            } else {
+              if (node.nodeName != 'P' || node.innerHTML !== '') // isTable, ignore empty <p>
+                bList.push(node);
+            }
           }
       }
       // else, '$' defined    // ignore, such as <span $=xx>
@@ -15789,13 +16130,13 @@ var TMarkedDiv_ = function (_TDiv_4) {
   function TMarkedDiv_(name, desc) {
     _classCallCheck(this, TMarkedDiv_);
 
-    var _this57 = _possibleConstructorReturn(this, (TMarkedDiv_.__proto__ || Object.getPrototypeOf(TMarkedDiv_)).call(this, name || 'MarkedDiv', desc));
+    var _this58 = _possibleConstructorReturn(this, (TMarkedDiv_.__proto__ || Object.getPrototypeOf(TMarkedDiv_)).call(this, name || 'MarkedDiv', desc));
 
-    _this57._defaultProp.width = null;
-    _this57._defaultProp.minWidth = 20;
-    _this57._defaultProp.noShow = '';
-    _this57._silentProp.push('marked.', 'hasStatic.', 'noSaveChild.');
-    return _this57;
+    _this58._defaultProp.width = null;
+    _this58._defaultProp.minWidth = 20;
+    _this58._defaultProp.noShow = '';
+    _this58._silentProp.push('marked.', 'hasStatic.', 'noSaveChild.');
+    return _this58;
   }
 
   _createClass2(TMarkedDiv_, [{
@@ -15993,7 +16334,7 @@ var TMarkedDiv_ = function (_TDiv_4) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);
@@ -16018,10 +16359,10 @@ var TMarkedTable_ = function (_TMarkedDiv_) {
   function TMarkedTable_(name, desc) {
     _classCallCheck(this, TMarkedTable_);
 
-    var _this58 = _possibleConstructorReturn(this, (TMarkedTable_.__proto__ || Object.getPrototypeOf(TMarkedTable_)).call(this, name || 'MarkedTable', desc));
+    var _this59 = _possibleConstructorReturn(this, (TMarkedTable_.__proto__ || Object.getPrototypeOf(TMarkedTable_)).call(this, name || 'MarkedTable', desc));
 
-    _this58._silentProp.push('markedTable.');
-    return _this58;
+    _this59._silentProp.push('markedTable.');
+    return _this59;
   }
 
   _createClass2(TMarkedTable_, [{
@@ -16045,7 +16386,7 @@ var TMarkedTable_ = function (_TMarkedDiv_) {
     key: 'render',
     value: function render() {
       syncProps_(this);
-      if (this.hideThis) return null; // as <noscript>
+      if (this['hide.']) return null; // as <noscript>
 
       var sTag = this.state['tagName.'];
       if (!sTag) return getOnlyChild_(this);

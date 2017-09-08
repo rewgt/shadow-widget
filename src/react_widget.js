@@ -354,7 +354,7 @@ else {
   window.W = W;
 }
 
-// W.$dataSrc = undefined; // undefined or {sPath:dInitProp}
+// W.$dataSrc = undefined;
 W.__debug__  = 0;
 W.$templates = {};
 W.$css       = [];
@@ -397,8 +397,8 @@ var utils = W.$utils = {
   },
 };
 
-Object.defineProperty(utils,'DIV',{enumerable:true,configurable:false,writable:false,value:1});
-Object.defineProperty(utils,'SPAN',{enumerable:true,configurable:false,writable:false,value:3});
+// Object.defineProperty(utils,'DIV',{enumerable:true,configurable:false,writable:false,value:1});
+// Object.defineProperty(utils,'SPAN',{enumerable:true,configurable:false,writable:false,value:3});
 
 W.$cachedClass = {};
 W.$ex = new wdgtExtending(); // for extending, such as ex.update  // this.component is undefined
@@ -1917,6 +1917,62 @@ var re_lt_ = /&lt;/g, re_gt_ = /&gt;/g, re_amp_ = /&amp;/g;
 ( function(hljs) {
   if (!hljs || !hljs.highlight) return;
   
+  var ln_re_   = /\r\n|\r|\n/g;
+  var num_re_  = /^[0-9][0-9]+ /;    // start with 'nn' means line number tag
+  var hint_re_ = /^~~+ /;            // start with '~~' means highlight this line
+  
+  function getLineInfo(bRet,bNum,code) {
+    var numCount = 0, hintCount = 0;
+    var bLn = code.split(ln_re_), len = bLn.length;
+    var iLastLn = -1, sLastNum = '0';
+    for (var i=0; i < len; i++) {
+      var item = bLn[i], hasHint = false;
+      var sNew = item.replace(hint_re_, function(sMatch) {
+        hasHint = true; hintCount += 1;
+        var iTmp = sMatch.length;
+        if (iLastLn + 1 == i) {
+          iLastLn = i; sLastNum = (parseInt(sLastNum) + 1) + '';
+          iTmp -= 1;
+          sLastNum = sLastNum.slice(-iTmp);  // trim to same width: ~~
+          if (sLastNum.length < iTmp) sLastNum = (new Array(iTmp-sLastNum.length+1)).join('0') + sLastNum;
+          bRet[i] = sLastNum + '!';
+        }
+        else bRet[i] = (new Array(iTmp)).join(' ') + '!';
+        return '';
+      });
+      
+      if (hasHint)
+        bLn[i] = sNew;
+      else {
+        var hasNum = false;
+        var sNew2 = item.replace(num_re_, function(sMatch) {
+          hasNum = true; numCount += 1;
+          sLastNum = bRet[i] = sMatch.slice(0,-1);
+          iLastLn = i;
+          return '';
+        });
+        if (hasNum) bLn[i] = sNew2;
+      }
+    }
+    
+    if (!bRet.length)   // no changing
+      return code;
+    else {
+      if (!hintCount && numCount <= 1) {  // avoid accident preceed-number
+        bRet.splice(0);
+        return code;    // no changing
+      }
+      else {
+        if (numCount) bNum.push(numCount);
+        return bLn.join('\n');
+      }
+    }
+  }
+  
+  function makeLnNum(hasLnNum,item) {
+    return hasLnNum? '<span class="hljs-ln-num" data="' + item + '"></span>': '';
+  }
+  
   utils.marked.setOptions( {
     highlight: function (code,sTag) {
       var isHtml = false;
@@ -1930,9 +1986,27 @@ var re_lt_ = /&lt;/g, re_gt_ = /&gt;/g, re_amp_ = /&amp;/g;
       
       if (sTag == 'plain' || !isHtml)
         code = code.replace(re_lt_,'<').replace(re_gt_,'>').replace(re_amp_,'&');
-      if (sTag == 'plain')
-        return code;
-      else return hljs.highlight(sTag,code,true).value;
+      
+      var bInfo = [], bNum = [];
+      code = getLineInfo(bInfo,bNum,code);
+      
+      if (sTag != 'plain')
+        code = hljs.highlight(sTag,code,true).value;
+      
+      var len = bInfo.length;
+      if (len) {
+        var bLn = code.split(ln_re_), len2 = bLn.length;
+        for (var i=0; i < len; i++) {
+          var item = bInfo[i];
+          if (item && i < len2) {
+            if (item.slice(-1) == '!')
+              bLn[i] = '<span class="hljs-hint">' + makeLnNum(bNum.length,item.slice(0,-1)) + bLn[i] + '</span>';
+            else bLn[i] = makeLnNum(bNum.length,item) + bLn[i];
+          }
+        }
+        return bLn.join('\n');
+      }
+      else return code;
     }
   });
 })(window.hljs);  // fix to cdn version of highlight.js
@@ -2125,6 +2199,44 @@ this.ajax = ajax;  // regist as W.$utils.ajax
 }).call(utils);
 //------- end of jsonp/ajax --------
 
+utils.bindMountData = function(data) {
+  if (!data || typeof data != 'object') {
+    console.log('error: invalid W.$dataSrc');
+    return;
+  }
+  
+  var idSetter = W.$idSetter; // must defined
+  Object.keys(idSetter).forEach( function(sKey) {
+    var fn = idSetter[sKey];
+    if (typeof fn != 'function') return;
+    
+    var item = data[sKey];
+    if (item && typeof item == 'object') {
+      var item2 = Object.assign({},item), attrs = item2.__attr__;
+      delete item2.__attr__;
+      if (!Array.isArray(attrs))
+        attrs = Object.keys(item2);
+      
+      var wrapFn = wrapFunc(sKey,attrs,item2,fn);
+      Object.defineProperty(idSetter,sKey,{ enumerable:true, configurable:true,
+        get: function() { return wrapFn }, // no 'set'
+      });
+    }
+  });
+  
+  function wrapFunc(sKey,attrs,srcData,originFn) {
+    return ( function(value,oldValue,sAttr) {
+      if (originFn.call(this,value,oldValue,sAttr))
+        return;  // if origin idSetter return `true` means no chain data
+      if (value == 2) {  // when mount
+        for (var i=0,attr; attr = attrs[i]; i++) {
+          this.duals[attr] = srcData[attr];
+        }
+      }
+    });
+  }
+};
+
 utils.loadingEntry = function(require,module,exports) {
   var containNode_ = document.getElementById('react-container');
   if (!containNode_) return;
@@ -2139,8 +2251,7 @@ utils.loadingEntry = function(require,module,exports) {
   
   if (window.W !== W) { // old window.W maybe only has W.$modules
     if (window.W) W.$modules = window.W.$modules; // main.js maybe included after react-widget
-    if (W.__debug__ || W.__design__)
-      window.W = W;     // regist for debugging
+    window.W = W;
   }
   
   var bImporting_ = W.$modules;

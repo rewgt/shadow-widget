@@ -2,13 +2,13 @@
 
 var React = window.React || require('react');
 var ReactDOM = window.ReactDOM || require('react-dom');
-
-var createClass_ = React.createClass;
-if (!createClass_) console.log('fatal error: invalid React.createClass'); // before v15.5
+var createClass_ = window.createReactClass || require('create-react-class');
 
 var W = require('./react_widget');
 var T = W.$templates, utils = W.$utils, ex = W.$ex;
 var idSetter = W.$idSetter, creator = W.$creator;
+
+creator.createClass_ = createClass_;
 
 ( function(loc) {
   var b = loc.pathname.split('/');
@@ -24,7 +24,7 @@ var idSetter = W.$idSetter, creator = W.$creator;
 })(window.location);
 
 utils.version = function() {
-  return '1.0.5';
+  return '1.1.0';
 };
 
 var vendorId_ = (function(sUA) {

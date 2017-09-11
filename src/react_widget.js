@@ -2,9 +2,7 @@
 
 var React = window.React || require('react');
 var ReactDOM = window.ReactDOM || require('react-dom');
-
-var createClass_ = React.createClass;
-if (!createClass_) console.log('fatal error: invalid React.createClass'); // before v15.5
+var createClass_ = window.createReactClass || require('create-react-class');
 
 if (!Object.assign) { // polyfill function
   Object.assign = function() {

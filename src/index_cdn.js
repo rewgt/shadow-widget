@@ -6,6 +6,7 @@
 
 var React = window.React;
 var ReactDOM = window.ReactDOM;
+
 var W = undefined, T = undefined;
 
 if (!React || !ReactDOM) {

@@ -2,9 +2,9 @@
 ### About shadow-widget
 
 Like 'react + reflux + react-router', but more simple and powerful,
-suports visual progaming also.
+suports visual progamming also.
 
-Last stable version: v1.0
+Last stable version: v1.1
 
 ### Install
 

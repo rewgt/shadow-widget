@@ -5,12 +5,10 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 (function (process){
 /**
- * Copyright 2013-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) 2013-present, Facebook, Inc.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
  */
 
@@ -880,12 +878,10 @@ module.exports = factory;
 }).call(this,require('_process'))
 },{"_process":11,"fbjs/lib/emptyObject":4,"fbjs/lib/invariant":5,"fbjs/lib/warning":6,"object-assign":7}],2:[function(require,module,exports){
 /**
- * Copyright 2013-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) 2013-present, Facebook, Inc.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
  */
 
@@ -915,11 +911,9 @@ module.exports = factory(
 
 /**
  * Copyright (c) 2013-present, Facebook, Inc.
- * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
  * 
  */
@@ -953,11 +947,9 @@ module.exports = emptyFunction;
 (function (process){
 /**
  * Copyright (c) 2013-present, Facebook, Inc.
- * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
  */
 
@@ -975,11 +967,9 @@ module.exports = emptyObject;
 (function (process){
 /**
  * Copyright (c) 2013-present, Facebook, Inc.
- * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
  */
 
@@ -1032,12 +1022,10 @@ module.exports = invariant;
 },{"_process":11}],6:[function(require,module,exports){
 (function (process){
 /**
- * Copyright 2014-2015, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) 2014-present, Facebook, Inc.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
  */
 
@@ -3785,7 +3773,7 @@ creator.createClass_ = createClass_;
 })(window.location);
 
 utils.version = function () {
-  return '1.1.0';
+  return '1.1.1';
 };
 
 var vendorId_ = function (sUA) {
@@ -6794,7 +6782,7 @@ function triggerDual_(comp, attr, oldValue) {
   var gui = comp.$gui,
       bConn = gui.connectTo[attr];
   if (bConn && gui.compState >= 2) {
-    // not trigger when first render
+    // trigger when duals.xx ready
     setTimeout(function () {
       triggerConnTo_(bConn, comp.state[attr], oldValue, attr);
     }, 0);
@@ -6885,11 +6873,11 @@ function dualFuncOfGetSet_(comp, attr, superSet, setFn, baseDual) {
       }
     }
 
-    if (triggerLsn) {
-      // only trigger listen in inner-most setter-func // avoid trigger twice
+    // only trigger listen in inner-most setter-func // avoid trigger twice
+    if (triggerLsn && gui.compState >= 2) {
+      // only when duals.xx ready and not unmount
       var bConn = gui.connectTo[attr];
-      if (bConn && gui.compState >= 2) {
-        // not trigger when first render
+      if (bConn) {
         setTimeout(function () {
           triggerConnTo_(bConn, comp.state[attr], oldValue, attr);
         }, 0);
@@ -6910,8 +6898,8 @@ function syncProps_(comp) {
   try {
     if (gui.compState == 0) {
       firstRender = true;
-      gui.compState = 1; // first render
-    } else gui.compState = 2; // 2 means second or later render
+      gui.compState = 1; // first render, if gui.compState = 2 means second or later render
+    }
 
     // setup gui.duals and regist tagAttrs to duals
     var sCtrlFlow = gui.flowFlag;
@@ -7187,8 +7175,11 @@ function syncProps_(comp) {
       while (item = bWaitPass.shift()) {
         duals[item[0]] = item[1]; // assign by setter
       }
+
+      gui.compState = 2;
     } else {
       // not first render
+      // gui.compState = 2;  // already is 2
       exprDict = gui.exprAttrs;
       gui.duals_ = null;
 
@@ -7327,6 +7318,7 @@ function syncProps_(comp) {
     }
 
     if (bConns.length && gui.compState >= 2) {
+      // not unmount
       setTimeout(function () {
         bConns.forEach(function (item) {
           triggerConnTo_(item[0], item[1], item[2], item[3]); // triggerConnTo_(bConn,value,oldValue,sKey)
@@ -7363,6 +7355,7 @@ function syncProps_(comp) {
     }
     duals.childNumId = gui.comps.length + (gui.removeNum << 16);
   } catch (e) {
+    if (firstRender) gui.compState = 2;
     console.log(e);
   }
 
@@ -7715,8 +7708,11 @@ function dumpReactTree_(bRet, wdgt, sPath) {
       var bStated = shadowTemp[1],
           bSilent = shadowTemp[2];
       bStated.forEach(function (item) {
-        if (hasOwn_.call(dProp, item)) // only fetch back items that in 'link.props'
-          dProp[item] = objState[item];
+        if (hasOwn_.call(dProp, '$' + item)) // such as $width=expr
+          delete dProp[item];else {
+          if (hasOwn_.call(dProp, item)) // only fetch back items that in 'link.props'
+            dProp[item] = objState[item];
+        }
       });
       bSilent.forEach(function (item) {
         delete dProp[item];
@@ -7754,8 +7750,11 @@ function dumpReactTree_(bRet, wdgt, sPath) {
       Object.assign(dProp, compObj.props);
       bStated.forEach(function (item) {
         // NOT take data-* aria-* as stated props
-        // if (hasOwn_.call(dProp,item)) // maybe last time prop.xx is default
-        dProp[item] = objState[item];
+        if (hasOwn_.call(dProp, '$' + item)) // such as $width=expr
+          delete dProp[item];else {
+          // if (hasOwn_.call(dProp,item)) // maybe last time prop.xx is default
+          dProp[item] = objState[item];
+        }
       });
       bSilent.forEach(function (item) {
         delete dProp[item];
@@ -8701,7 +8700,7 @@ function getCompByPath_(entry, sPath_) {
   function doCallback(targ) {
     targ = targ && targ.component;
     if (!targ) {
-      console.log('warning: can not find widget (' + sPath_ + ').');
+      // console.log('warning: can not find widget (' + sPath_ + ').');
       return null;
     } else return targ;
   }
@@ -10122,6 +10121,7 @@ var TWidget_ = function () {
         return;
       }
 
+      var virtualKey = this.props['data-rewgt-owner'];
       var b = Object.keys(evSet);
       for (var i = 0, sKey; sKey = b[i]; i++) {
         if (sKey[0] != '$') continue;
@@ -10129,14 +10129,10 @@ var TWidget_ = function () {
         if (sKey2[0] == '$') continue; // ignore $$onXX
 
         var fn = evSet[sKey];
-        if (typeof fn == 'function') this[sKey] = eventset[sKey2] = chainFunc(fn, eventset[sKey2], this);
-      }
-
-      function chainFunc(fn, oldFn, comp) {
-        return function () {
-          fn.apply(comp, arguments);
-          if (oldFn) oldFn.apply(comp, arguments);
-        };
+        if (typeof fn == 'function') {
+          this[sKey] = bindable_(fn) ? fn.bind(this) : fn;
+          if (typeof this['$' + sKey] != 'function') eventset[sKey2] = wrapCompEvt_(this, sKey2, virtualKey);
+        }
       }
     }
   }, {
@@ -10534,7 +10530,6 @@ var TWidget_ = function () {
               // can not assign duals.innerSize, but can trigger listen
               var bConn = gui.connectTo['innerSize'];
               if (bConn && gui.compState >= 2) {
-                // not trigger when first render
                 setTimeout(function () {
                   triggerConnTo_(bConn, newSize, oldSize, 'innerSize');
                 }, 0);
@@ -10729,24 +10724,6 @@ var TWidget_ = function () {
                 props.width = wdAuto_ ? null : wd; // also perform check in duals.width, set here to help spared-space caculating
                 props.height = hiAuto_ ? null : hi;
                 if (isTopmost && child.props['isScenePage.'] && child.props.noShow && !W.__design__) props['isTemplate.'] = true;
-              } else {
-                // paragraph (div p li h1 blockquote ...) or inline widget, convert width/height to style.width/height
-                var isPara = hasClass_(child.props.className, 'rewgt-unit');
-                if (!wdAuto_ && wd >= 0) {
-                  // for inline widget, suggest no using props.width/height, while used also OK, just convert it to style
-                  var childWd_ = wd >= 1 ? wd + 'px' : wd >= 0.9999 ? '100%' : wd * 100 + '%';
-                  props.style = Object.assign({}, child.props.style, { width: childWd_ });
-                  if (isPara) props.width = wd; // for paragraph, still use props.width, no use for inline widget
-                } else {
-                  if (isPara) props.width = null;
-                }
-                if (!hiAuto_ && hi >= 0) {
-                  var childHi_ = hi >= 1 ? hi + 'px' : hi >= 0.9999 ? '100%' : hi * 100 + '%';
-                  props.style = Object.assign({}, child.props.style, { height: childHi_ });
-                  if (isPara) props.height = hi;
-                } else {
-                  if (isPara) props.height = null;
-                }
               }
 
               if (isScenePage) {
@@ -10882,9 +10859,11 @@ var TWidget_ = function () {
       var bKey = Object.keys(gui.connectBy),
           bRmv = [];
       for (var i = 0, item; item = bKey[i]; i++) {
-        var b = gui.connectBy[item],
-            sour = b[0];
-        if (sour !== this && bRmv.indexOf(sour) < 0) bRmv.push(sour);
+        var b = gui.connectBy[item];
+        for (var i2 = 0, item2; item2 = b[i2]; i2++) {
+          var sour = item2[0];
+          if (sour !== this && bRmv.indexOf(sour) < 0) bRmv.push(sour);
+        }
       }
       for (var i = 0, sour; sour = bRmv[i]; i++) {
         sour.unlisten('*', this);
@@ -12652,9 +12631,11 @@ var TSplitDiv_ = function (_TUnit_) {
       if (this.$onMouseDown) this.$onMouseDown(event);
     }
   }, {
-    key: '$onClick',
-    value: function $onClick(event) {
-      event.stopPropagation(); // avoid passing click to parent
+    key: '$$onClick',
+    value: function $$onClick(event) {
+      if (W.__design__) event.stopPropagation(); // avoid passing click to parent, make it draggable
+
+      if (this.$onClick) this.$onClick(event);
     }
   }]);
 
@@ -13330,23 +13311,87 @@ var TDiv2_ = function (_TDiv_) {
 T.Div2_ = TDiv2_;
 T.Div2 = new TDiv2_();
 
-var virtualdiv_margin_ = [null, null, null, null];
+function simpleExtends(TBase, sName, noHtml) {
+  var T = function (_TBase) {
+    _inherits(T, _TBase);
 
-var TVirtualDiv_ = function (_TDiv2_) {
-  _inherits(TVirtualDiv_, _TDiv2_);
+    function T(name, desc) {
+      _classCallCheck(this, T);
+
+      var _this10 = _possibleConstructorReturn(this, (T.__proto__ || Object.getPrototypeOf(T)).call(this, name || sName, desc));
+
+      if (noHtml) _this10._htmlText = false;
+      return _this10;
+    }
+
+    _createClass2(T, [{
+      key: 'getDefaultProps',
+      value: function getDefaultProps() {
+        var props = _get(T.prototype.__proto__ || Object.getPrototypeOf(T.prototype), 'getDefaultProps', this).call(this);
+        props['tagName.'] = sName.toLowerCase();
+        return props;
+      }
+    }]);
+
+    return T;
+  }(TBase);
+
+  return T;
+}
+
+var null_margin_ = [null, null, null, null];
+
+var TStyle_ = function (_TDiv2_) {
+  _inherits(TStyle_, _TDiv2_);
+
+  function TStyle_(name, desc) {
+    _classCallCheck(this, TStyle_);
+
+    var _this11 = _possibleConstructorReturn(this, (TStyle_.__proto__ || Object.getPrototypeOf(TStyle_)).call(this, name || 'Style', desc));
+
+    delete _this11._defaultProp.minWidth;
+    delete _this11._defaultProp.minHeight;
+    Object.assign(_this11._defaultProp, {
+      left: null, top: null, margin: null_margin_.slice(0),
+      padding: null_margin_.slice(0), borderWidth: null_margin_.slice(0)
+    });
+    return _this11;
+  }
+
+  _createClass2(TStyle_, [{
+    key: 'getDefaultProps',
+    value: function getDefaultProps() {
+      var props = _get(TStyle_.prototype.__proto__ || Object.getPrototypeOf(TStyle_.prototype), 'getDefaultProps', this).call(this);
+      delete props.minWidth;
+      delete props.minHeight;
+      return Object.assign(props, { 'tagName.': 'style',
+        left: null, top: null, margin: null_margin_.slice(0),
+        padding: null_margin_.slice(0), borderWidth: null_margin_.slice(0)
+      });
+    }
+  }]);
+
+  return TStyle_;
+}(TDiv2_);
+
+T.Style_ = TStyle_;
+T.Style = new TStyle_();
+
+var TVirtualDiv_ = function (_TDiv2_2) {
+  _inherits(TVirtualDiv_, _TDiv2_2);
 
   function TVirtualDiv_(name, desc) {
     _classCallCheck(this, TVirtualDiv_);
 
-    var _this10 = _possibleConstructorReturn(this, (TVirtualDiv_.__proto__ || Object.getPrototypeOf(TVirtualDiv_)).call(this, name || 'VirtualDiv', desc));
+    var _this12 = _possibleConstructorReturn(this, (TVirtualDiv_.__proto__ || Object.getPrototypeOf(TVirtualDiv_)).call(this, name || 'VirtualDiv', desc));
 
-    delete _this10._defaultProp.minWidth;
-    delete _this10._defaultProp.minHeight;
-    Object.assign(_this10._defaultProp, {
-      left: null, top: null, margin: virtualdiv_margin_.slice(0),
-      padding: virtualdiv_margin_.slice(0), borderWidth: virtualdiv_margin_.slice(0)
+    delete _this12._defaultProp.minWidth;
+    delete _this12._defaultProp.minHeight;
+    Object.assign(_this12._defaultProp, {
+      left: null, top: null, margin: null_margin_.slice(0),
+      padding: null_margin_.slice(0), borderWidth: null_margin_.slice(0)
     });
-    return _this10;
+    return _this12;
   }
 
   _createClass2(TVirtualDiv_, [{
@@ -13356,8 +13401,8 @@ var TVirtualDiv_ = function (_TDiv2_) {
       delete props.minWidth;
       delete props.minHeight;
       return Object.assign(props, { 'tagName.': '',
-        left: null, top: null, margin: virtualdiv_margin_.slice(0),
-        padding: virtualdiv_margin_.slice(0), borderWidth: virtualdiv_margin_.slice(0)
+        left: null, top: null, margin: null_margin_.slice(0),
+        padding: null_margin_.slice(0), borderWidth: null_margin_.slice(0)
       });
     }
   }]);
@@ -13374,11 +13419,11 @@ var THiddenDiv_ = function (_TDiv_2) {
   function THiddenDiv_(name, desc) {
     _classCallCheck(this, THiddenDiv_);
 
-    var _this11 = _possibleConstructorReturn(this, (THiddenDiv_.__proto__ || Object.getPrototypeOf(THiddenDiv_)).call(this, name || 'HiddenDiv', desc));
+    var _this13 = _possibleConstructorReturn(this, (THiddenDiv_.__proto__ || Object.getPrototypeOf(THiddenDiv_)).call(this, name || 'HiddenDiv', desc));
 
-    _this11._defaultProp.width = null;
-    delete _this11._defaultProp.minHeight;
-    return _this11;
+    _this13._defaultProp.width = null;
+    delete _this13._defaultProp.minHeight;
+    return _this13;
   }
 
   _createClass2(THiddenDiv_, [{
@@ -13404,34 +13449,6 @@ var THiddenDiv_ = function (_TDiv_2) {
 T.HiddenDiv_ = THiddenDiv_;
 T.HiddenDiv = new THiddenDiv_();
 
-function simpleExtends(TBase, sName, noHtml) {
-  var T = function (_TBase) {
-    _inherits(T, _TBase);
-
-    function T(name, desc) {
-      _classCallCheck(this, T);
-
-      var _this12 = _possibleConstructorReturn(this, (T.__proto__ || Object.getPrototypeOf(T)).call(this, name || sName, desc));
-
-      if (noHtml) _this12._htmlText = false;
-      return _this12;
-    }
-
-    _createClass2(T, [{
-      key: 'getDefaultProps',
-      value: function getDefaultProps() {
-        var props = _get(T.prototype.__proto__ || Object.getPrototypeOf(T.prototype), 'getDefaultProps', this).call(this);
-        props['tagName.'] = sName.toLowerCase();
-        return props;
-      }
-    }]);
-
-    return T;
-  }(TBase);
-
-  return T;
-}
-
 T.Article_ = simpleExtends(TDiv_, 'Article');
 T.Article = new T.Article_();
 T.Section_ = simpleExtends(TDiv_, 'Section');
@@ -13455,13 +13472,13 @@ var TP_ = function (_TUnit_4) {
   function TP_(name, desc) {
     _classCallCheck(this, TP_);
 
-    var _this13 = _possibleConstructorReturn(this, (TP_.__proto__ || Object.getPrototypeOf(TP_)).call(this, name || 'P', desc));
+    var _this14 = _possibleConstructorReturn(this, (TP_.__proto__ || Object.getPrototypeOf(TP_)).call(this, name || 'P', desc));
 
-    _this13._defaultProp.width = null;
-    _this13._defaultProp.height = null;
-    _this13._defaultProp.margin = TPara_margin_.slice(0);
-    _this13._htmlText = true;
-    return _this13;
+    _this14._defaultProp.width = null;
+    _this14._defaultProp.height = null;
+    _this14._defaultProp.margin = TPara_margin_.slice(0);
+    _this14._htmlText = true;
+    return _this14;
   }
 
   _createClass2(TP_, [{
@@ -13519,10 +13536,10 @@ var TNoscript_ = function (_TP_) {
   function TNoscript_(name, desc) {
     _classCallCheck(this, TNoscript_);
 
-    var _this14 = _possibleConstructorReturn(this, (TNoscript_.__proto__ || Object.getPrototypeOf(TNoscript_)).call(this, name || 'Noscript', desc));
+    var _this15 = _possibleConstructorReturn(this, (TNoscript_.__proto__ || Object.getPrototypeOf(TNoscript_)).call(this, name || 'Noscript', desc));
 
-    delete _this14._defaultProp.margin;
-    return _this14;
+    delete _this15._defaultProp.margin;
+    return _this15;
   }
 
   _createClass2(TNoscript_, [{
@@ -13562,12 +13579,12 @@ var TFieldset_ = function (_TP_2) {
   function TFieldset_(name, desc) {
     _classCallCheck(this, TFieldset_);
 
-    var _this15 = _possibleConstructorReturn(this, (TFieldset_.__proto__ || Object.getPrototypeOf(TFieldset_)).call(this, name || 'Fieldset', desc));
+    var _this16 = _possibleConstructorReturn(this, (TFieldset_.__proto__ || Object.getPrototypeOf(TFieldset_)).call(this, name || 'Fieldset', desc));
 
-    _this15._defaultProp.padding = TFieldset_padding_.slice(0);
-    _this15._defaultProp.borderWidth = TFieldset_border_width_.slice(0);
-    _this15._defaultProp.style = Object.assign({}, TFieldSet_style_);
-    return _this15;
+    _this16._defaultProp.padding = TFieldset_padding_.slice(0);
+    _this16._defaultProp.borderWidth = TFieldset_border_width_.slice(0);
+    _this16._defaultProp.style = Object.assign({}, TFieldSet_style_);
+    return _this16;
   }
 
   _createClass2(TFieldset_, [{
@@ -13599,10 +13616,10 @@ var TUl_ = function (_TP_3) {
   function TUl_(name, desc) {
     _classCallCheck(this, TUl_);
 
-    var _this16 = _possibleConstructorReturn(this, (TUl_.__proto__ || Object.getPrototypeOf(TUl_)).call(this, name || 'Ul', desc));
+    var _this17 = _possibleConstructorReturn(this, (TUl_.__proto__ || Object.getPrototypeOf(TUl_)).call(this, name || 'Ul', desc));
 
-    _this16._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _silentProp no change
-    return _this16;
+    _this17._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _silentProp no change
+    return _this17;
   }
 
   _createClass2(TUl_, [{
@@ -13627,10 +13644,10 @@ var TOl_ = function (_TP_4) {
   function TOl_(name, desc) {
     _classCallCheck(this, TOl_);
 
-    var _this17 = _possibleConstructorReturn(this, (TOl_.__proto__ || Object.getPrototypeOf(TOl_)).call(this, name || 'Ol', desc));
+    var _this18 = _possibleConstructorReturn(this, (TOl_.__proto__ || Object.getPrototypeOf(TOl_)).call(this, name || 'Ol', desc));
 
-    _this17._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _silentProp no change
-    return _this17;
+    _this18._defaultProp.padding = TUl_padding_.slice(0); // _statedProp, _silentProp no change
+    return _this18;
   }
 
   _createClass2(TOl_, [{
@@ -13678,11 +13695,11 @@ var TIframe_ = function (_TP_5) {
   function TIframe_(name, desc) {
     _classCallCheck(this, TIframe_);
 
-    var _this18 = _possibleConstructorReturn(this, (TIframe_.__proto__ || Object.getPrototypeOf(TIframe_)).call(this, name || 'Iframe', desc));
+    var _this19 = _possibleConstructorReturn(this, (TIframe_.__proto__ || Object.getPrototypeOf(TIframe_)).call(this, name || 'Iframe', desc));
 
-    _this18._defaultProp.margin = TIframe_margin_.slice(0);
-    _this18._htmlText = false;
-    return _this18;
+    _this19._defaultProp.margin = TIframe_margin_.slice(0);
+    _this19._htmlText = false;
+    return _this19;
   }
 
   _createClass2(TIframe_, [{
@@ -13709,10 +13726,10 @@ var TBlockquote_ = function (_TP_6) {
   function TBlockquote_(name, desc) {
     _classCallCheck(this, TBlockquote_);
 
-    var _this19 = _possibleConstructorReturn(this, (TBlockquote_.__proto__ || Object.getPrototypeOf(TBlockquote_)).call(this, name || 'Blockquote', desc));
+    var _this20 = _possibleConstructorReturn(this, (TBlockquote_.__proto__ || Object.getPrototypeOf(TBlockquote_)).call(this, name || 'Blockquote', desc));
 
-    _this19._defaultProp.padding = TBlockquote_padding_.slice(0);
-    return _this19;
+    _this20._defaultProp.padding = TBlockquote_padding_.slice(0);
+    return _this20;
   }
 
   _createClass2(TBlockquote_, [{
@@ -13737,10 +13754,10 @@ var TTable_ = function (_TP_7) {
   function TTable_(name, desc) {
     _classCallCheck(this, TTable_);
 
-    var _this20 = _possibleConstructorReturn(this, (TTable_.__proto__ || Object.getPrototypeOf(TTable_)).call(this, name || 'Table', desc));
+    var _this21 = _possibleConstructorReturn(this, (TTable_.__proto__ || Object.getPrototypeOf(TTable_)).call(this, name || 'Table', desc));
 
-    _this20._htmlText = false;
-    return _this20;
+    _this21._htmlText = false;
+    return _this21;
   }
 
   _createClass2(TTable_, [{
@@ -13774,10 +13791,10 @@ var TTbody_ = function (_TVirtualDiv_) {
   function TTbody_(name, desc) {
     _classCallCheck(this, TTbody_);
 
-    var _this21 = _possibleConstructorReturn(this, (TTbody_.__proto__ || Object.getPrototypeOf(TTbody_)).call(this, name || 'Tbody', desc));
+    var _this22 = _possibleConstructorReturn(this, (TTbody_.__proto__ || Object.getPrototypeOf(TTbody_)).call(this, name || 'Tbody', desc));
 
-    _this21._htmlText = false;
-    return _this21;
+    _this22._htmlText = false;
+    return _this22;
   }
 
   _createClass2(TTbody_, [{
@@ -13846,12 +13863,12 @@ var THr_ = function (_TP_8) {
   function THr_(name, desc) {
     _classCallCheck(this, THr_);
 
-    var _this22 = _possibleConstructorReturn(this, (THr_.__proto__ || Object.getPrototypeOf(THr_)).call(this, name || 'Hr', desc));
+    var _this23 = _possibleConstructorReturn(this, (THr_.__proto__ || Object.getPrototypeOf(THr_)).call(this, name || 'Hr', desc));
 
-    _this22._defaultProp.width = 0.9999;
-    _this22._defaultProp.borderWidth = THr_border_width_.slice(0);
-    _this22._htmlText = false;
-    return _this22;
+    _this23._defaultProp.width = 0.9999;
+    _this23._defaultProp.borderWidth = THr_border_width_.slice(0);
+    _this23._htmlText = false;
+    return _this23;
   }
 
   _createClass2(THr_, [{
@@ -13907,13 +13924,13 @@ var TSpan_ = function (_TWidget_4) {
   function TSpan_(name, desc) {
     _classCallCheck(this, TSpan_);
 
-    var _this24 = _possibleConstructorReturn(this, (TSpan_.__proto__ || Object.getPrototypeOf(TSpan_)).call(this, name || 'Span', desc));
+    var _this25 = _possibleConstructorReturn(this, (TSpan_.__proto__ || Object.getPrototypeOf(TSpan_)).call(this, name || 'Span', desc));
 
-    _this24._statedProp = [];
-    _this24._silentProp = ['className', 'hookTo.', 'keyid.', 'childInline.', 'tagName.'];
-    _this24._defaultProp = { width: undefined, height: undefined }; // 'html.' default is not passed, suggest not use width/height, but if used also OK // undefined means remove all none-number when saving
-    _this24._htmlText = true; // use 'html.'
-    return _this24;
+    _this25._statedProp = [];
+    _this25._silentProp = ['className', 'hookTo.', 'keyid.', 'childInline.', 'tagName.'];
+    _this25._defaultProp = { width: undefined, height: undefined }; // 'html.' default is not passed, suggest not use width/height, but if used also OK // undefined means remove all none-number when saving
+    _this25._htmlText = true; // use 'html.'
+    return _this25;
   }
 
   _createClass2(TSpan_, [{
@@ -14330,10 +14347,10 @@ var TBr_ = function (_TSpan_3) {
   function TBr_(name, desc) {
     _classCallCheck(this, TBr_);
 
-    var _this27 = _possibleConstructorReturn(this, (TBr_.__proto__ || Object.getPrototypeOf(TBr_)).call(this, name || 'Br', desc));
+    var _this28 = _possibleConstructorReturn(this, (TBr_.__proto__ || Object.getPrototypeOf(TBr_)).call(this, name || 'Br', desc));
 
-    _this27._htmlText = false;
-    return _this27;
+    _this28._htmlText = false;
+    return _this28;
   }
 
   _createClass2(TBr_, [{
@@ -14569,10 +14586,10 @@ var TImg_ = function (_TSpan_8) {
   function TImg_(name, desc) {
     _classCallCheck(this, TImg_);
 
-    var _this32 = _possibleConstructorReturn(this, (TImg_.__proto__ || Object.getPrototypeOf(TImg_)).call(this, name || 'Img', desc));
+    var _this33 = _possibleConstructorReturn(this, (TImg_.__proto__ || Object.getPrototypeOf(TImg_)).call(this, name || 'Img', desc));
 
-    _this32._htmlText = false;
-    return _this32;
+    _this33._htmlText = false;
+    return _this33;
   }
 
   _createClass2(TImg_, [{
@@ -14587,7 +14604,7 @@ var TImg_ = function (_TSpan_8) {
     value: function $$onDragStart(event) {
       if (W.__design__) {
         event.preventDefault(); // disable img draggable
-        return;
+        return; // avoid deep customizing
       }
       if (this.$onDragStart) this.$onDragStart(event);
     }
@@ -14649,10 +14666,10 @@ var TInput_ = function (_TSpan_10) {
   function TInput_(name, desc) {
     _classCallCheck(this, TInput_);
 
-    var _this34 = _possibleConstructorReturn(this, (TInput_.__proto__ || Object.getPrototypeOf(TInput_)).call(this, name || 'Input', desc));
+    var _this35 = _possibleConstructorReturn(this, (TInput_.__proto__ || Object.getPrototypeOf(TInput_)).call(this, name || 'Input', desc));
 
-    _this34._htmlText = false;
-    return _this34;
+    _this35._htmlText = false;
+    return _this35;
   }
 
   _createClass2(TInput_, [{
@@ -14887,8 +14904,52 @@ var TOptgroup_ = function (_TSpan_13) {
 T.Optgroup_ = TOptgroup_;
 T.Optgroup = new TOptgroup_();
 
-T.Option_ = simpleExtends(TSpan_, 'Option');
-T.Option = new T.Option_();
+/*
+function fireOption_(comp) {  // comp is Option or OptOption
+  var owner = comp.parentOf(true);
+  if (owner) {
+    if (owner.props['tagName.'] == 'optgroup')
+      owner = owner.parentOf(true);
+  }
+  if (owner && owner.props['tagName.'] == 'select' && !owner.props.multiple) {
+    var node = owner.getHtmlNode()
+    if (node)
+      node.value = comp.state.value; // fire it by manual, since event.preventDefault() called
+  }
+} */
+
+var TOption_ = function (_TSpan_14) {
+  _inherits(TOption_, _TSpan_14);
+
+  function TOption_(name, desc) {
+    _classCallCheck(this, TOption_);
+
+    return _possibleConstructorReturn(this, (TOption_.__proto__ || Object.getPrototypeOf(TOption_)).call(this, name || 'Option', desc));
+  }
+
+  _createClass2(TOption_, [{
+    key: 'getDefaultProps',
+    value: function getDefaultProps() {
+      var props = _get(TOption_.prototype.__proto__ || Object.getPrototypeOf(TOption_.prototype), 'getDefaultProps', this).call(this);
+      props['tagName.'] = 'option';
+      return props;
+    }
+  }, {
+    key: '$$onClick',
+    value: function $$onClick(event) {
+      if (W.__design__) {
+        event.preventDefault();
+        // fireOption_(this);
+      }
+      if (this.$onClick) this.$onClick(event);
+    }
+  }]);
+
+  return TOption_;
+}(TSpan_);
+
+T.Option_ = TOption_;
+T.Option = new TOption_();
 
 T.B_ = simpleExtends(TSpan_, 'B');
 T.B = new T.B_();
@@ -14927,8 +14988,8 @@ T.Cite = new T.Cite_();
 T.Dialog_ = simpleExtends(TSpan_, 'Dialog');
 T.Dialog = new T.Dialog_();
 
-var TMeter_ = function (_TSpan_14) {
-  _inherits(TMeter_, _TSpan_14);
+var TMeter_ = function (_TSpan_15) {
+  _inherits(TMeter_, _TSpan_15);
 
   function TMeter_(name, desc) {
     _classCallCheck(this, TMeter_);
@@ -14984,15 +15045,10 @@ function navSetChecked_(comp, checkedId, callback) {
   if (checkedId && gui.compState) {
     // if compState == 0, not ready yet
     var navKey = gui.navSubkey;
-    var oldId = comp.state.checkedId;
-    if (gui.navItems[checkedId]) {
-      // is valid checkedId
-      if (!disableSwitch(oldId, checkedId)) {
-        setAndTrigger(oldId, checkedId); // set immediately
-        comp.reRender(callback); // auto choose checkedId GroundXX to render out
-        return;
-      }
-    } else if (navKey) {
+    var oldId = comp.state.checkedId,
+        beTrigger = false;
+    if (gui.navItems[checkedId]) // is valid checkedId
+      beTrigger = true;else if (navKey) {
       var widget = comp.widget,
           subNav = widget && widget[navKey];
       subNav = subNav && subNav.component;
@@ -15001,6 +15057,14 @@ function navSetChecked_(comp, checkedId, callback) {
         subNav.fireChecked(checkedId, callback);
         return;
       }
+    } else {
+      if (Object.keys(gui.navItems).length == 0) // if no sub-nav and no GroundXX, using as opt-group
+        beTrigger = true;
+    }
+    if (beTrigger && !disableSwitch(oldId, checkedId)) {
+      setAndTrigger(oldId, checkedId); // set immediately
+      comp.reRender(callback); // auto choose checkedId GroundXX to render out
+      return;
     }
 
     // set checkedId even if switch ground failed, but not trigger duals.checkedId
@@ -15037,10 +15101,10 @@ var TNavPanel_ = function (_TPanel_3) {
   function TNavPanel_(name, desc) {
     _classCallCheck(this, TNavPanel_);
 
-    var _this39 = _possibleConstructorReturn(this, (TNavPanel_.__proto__ || Object.getPrototypeOf(TNavPanel_)).call(this, name || 'NavPanel', desc));
+    var _this41 = _possibleConstructorReturn(this, (TNavPanel_.__proto__ || Object.getPrototypeOf(TNavPanel_)).call(this, name || 'NavPanel', desc));
 
-    _this39._silentProp.push('isNavigator.');
-    return _this39;
+    _this41._silentProp.push('isNavigator.');
+    return _this41;
   }
 
   _createClass2(TNavPanel_, [{
@@ -15308,11 +15372,11 @@ var TNavDiv_ = function (_TNavPanel_) {
     _classCallCheck(this, TNavDiv_);
 
     // this._silentProp.push('isNavigator.'); // has defined in base class
-    var _this40 = _possibleConstructorReturn(this, (TNavDiv_.__proto__ || Object.getPrototypeOf(TNavDiv_)).call(this, name || 'NavDiv', desc));
+    var _this42 = _possibleConstructorReturn(this, (TNavDiv_.__proto__ || Object.getPrototypeOf(TNavDiv_)).call(this, name || 'NavDiv', desc));
 
-    _this40._defaultProp.height = null;
-    _this40._defaultProp.minHeight = 20;
-    return _this40;
+    _this42._defaultProp.height = null;
+    _this42._defaultProp.minHeight = 20;
+    return _this42;
   }
 
   _createClass2(TNavDiv_, [{
@@ -15374,12 +15438,12 @@ var TGroundPanel_ = function (_TPanel_4) {
   function TGroundPanel_(name, desc) {
     _classCallCheck(this, TGroundPanel_);
 
-    var _this41 = _possibleConstructorReturn(this, (TGroundPanel_.__proto__ || Object.getPrototypeOf(TGroundPanel_)).call(this, name || 'GroundPanel', desc));
+    var _this43 = _possibleConstructorReturn(this, (TGroundPanel_.__proto__ || Object.getPrototypeOf(TGroundPanel_)).call(this, name || 'GroundPanel', desc));
 
-    _this41._silentProp.push('isPlayground.');
-    _this41._defaultProp.height = null;
-    _this41._defaultProp.minHeight = 20;
-    return _this41;
+    _this43._silentProp.push('isPlayground.');
+    _this43._defaultProp.height = null;
+    _this43._defaultProp.minHeight = 20;
+    return _this43;
   }
 
   _createClass2(TGroundPanel_, [{
@@ -15411,13 +15475,13 @@ var TGroundDiv_ = function (_TUnit_5) {
   function TGroundDiv_(name, desc) {
     _classCallCheck(this, TGroundDiv_);
 
-    var _this42 = _possibleConstructorReturn(this, (TGroundDiv_.__proto__ || Object.getPrototypeOf(TGroundDiv_)).call(this, name || 'GroundDiv', desc));
+    var _this44 = _possibleConstructorReturn(this, (TGroundDiv_.__proto__ || Object.getPrototypeOf(TGroundDiv_)).call(this, name || 'GroundDiv', desc));
 
-    _this42._silentProp.push('isPlayground.');
-    _this42._defaultProp.height = null;
-    _this42._defaultProp.minHeight = 20;
-    _this42._htmlText = true;
-    return _this42;
+    _this44._silentProp.push('isPlayground.');
+    _this44._defaultProp.height = null;
+    _this44._defaultProp.minHeight = 20;
+    _this44._htmlText = true;
+    return _this44;
   }
 
   _createClass2(TGroundDiv_, [{
@@ -15649,18 +15713,18 @@ function addOptSchema_(dSchema, iLevel) {
   return dSchema;
 }
 
-var TOptSpan_ = function (_TSpan_15) {
-  _inherits(TOptSpan_, _TSpan_15);
+var TOptSpan_ = function (_TSpan_16) {
+  _inherits(TOptSpan_, _TSpan_16);
 
   function TOptSpan_(name, desc) {
     _classCallCheck(this, TOptSpan_);
 
-    var _this43 = _possibleConstructorReturn(this, (TOptSpan_.__proto__ || Object.getPrototypeOf(TOptSpan_)).call(this, name || 'OptSpan', desc));
+    var _this45 = _possibleConstructorReturn(this, (TOptSpan_.__proto__ || Object.getPrototypeOf(TOptSpan_)).call(this, name || 'OptSpan', desc));
 
-    _this43._statedProp.push('data-checked');
-    _this43._silentProp.push('isOption.');
-    _this43._defaultProp['data-checked'] = '';
-    return _this43;
+    _this45._statedProp.push('data-checked');
+    _this45._silentProp.push('isOption.');
+    _this45._defaultProp['data-checked'] = '';
+    return _this45;
   }
 
   _createClass2(TOptSpan_, [{
@@ -15710,7 +15774,6 @@ var TOptSpan_ = function (_TSpan_15) {
   }, {
     key: '$$onClick',
     value: function $$onClick(event) {
-      if (W.__design__) event.stopPropagation();
       if (this.state.disabled) return;
 
       this.setChecked(null);
@@ -15760,10 +15823,10 @@ var TOptImg_ = function (_TOptSpan_2) {
   function TOptImg_(name, desc) {
     _classCallCheck(this, TOptImg_);
 
-    var _this45 = _possibleConstructorReturn(this, (TOptImg_.__proto__ || Object.getPrototypeOf(TOptImg_)).call(this, name || 'OptImg', desc));
+    var _this47 = _possibleConstructorReturn(this, (TOptImg_.__proto__ || Object.getPrototypeOf(TOptImg_)).call(this, name || 'OptImg', desc));
 
-    _this45._htmlText = false;
-    return _this45;
+    _this47._htmlText = false;
+    return _this47;
   }
 
   _createClass2(TOptImg_, [{
@@ -15811,10 +15874,10 @@ var TOptOption_ = function (_TOptSpan_4) {
   function TOptOption_(name, desc) {
     _classCallCheck(this, TOptOption_);
 
-    var _this47 = _possibleConstructorReturn(this, (TOptOption_.__proto__ || Object.getPrototypeOf(TOptOption_)).call(this, name || 'OptOption', desc));
+    var _this49 = _possibleConstructorReturn(this, (TOptOption_.__proto__ || Object.getPrototypeOf(TOptOption_)).call(this, name || 'OptOption', desc));
 
-    _this47._silentProp.push('selected'); // not save 'selected', suggest only using 'data-checked'
-    return _this47;
+    _this49._silentProp.push('selected'); // not save 'selected', suggest only using 'data-checked'
+    return _this49;
   }
 
   _createClass2(TOptOption_, [{
@@ -15896,6 +15959,11 @@ var TOptOption_ = function (_TOptSpan_4) {
     key: '$$onClick',
     value: function $$onClick(event) {
       // overwrite super.$$onClick
+      if (W.__design__) {
+        event.preventDefault();
+        // fireOption_(this);
+      }
+
       if (this.$onClick) this.$onClick(event);
     }
   }]);
@@ -15912,12 +15980,12 @@ var TOptDiv_ = function (_TDiv_3) {
   function TOptDiv_(name, desc) {
     _classCallCheck(this, TOptDiv_);
 
-    var _this48 = _possibleConstructorReturn(this, (TOptDiv_.__proto__ || Object.getPrototypeOf(TOptDiv_)).call(this, name || 'OptDiv', desc));
+    var _this50 = _possibleConstructorReturn(this, (TOptDiv_.__proto__ || Object.getPrototypeOf(TOptDiv_)).call(this, name || 'OptDiv', desc));
 
-    _this48._statedProp.push('data-checked');
-    _this48._silentProp.push('isOption.');
-    _this48._defaultProp['data-checked'] = '';
-    return _this48;
+    _this50._statedProp.push('data-checked');
+    _this50._silentProp.push('isOption.');
+    _this50._defaultProp['data-checked'] = '';
+    return _this50;
   }
 
   _createClass2(TOptDiv_, [{
@@ -15967,7 +16035,6 @@ var TOptDiv_ = function (_TDiv_3) {
   }, {
     key: '$$onClick',
     value: function $$onClick(event) {
-      if (W.__design__) event.stopPropagation();
       if (this.state.disabled) return;
 
       this.setChecked(null);
@@ -15987,12 +16054,12 @@ var TOptLi_ = function (_TP_10) {
   function TOptLi_(name, desc) {
     _classCallCheck(this, TOptLi_);
 
-    var _this49 = _possibleConstructorReturn(this, (TOptLi_.__proto__ || Object.getPrototypeOf(TOptLi_)).call(this, name || 'OptLi', desc));
+    var _this51 = _possibleConstructorReturn(this, (TOptLi_.__proto__ || Object.getPrototypeOf(TOptLi_)).call(this, name || 'OptLi', desc));
 
-    _this49._statedProp.push('data-checked');
-    _this49._silentProp.push('isOption.');
-    _this49._defaultProp['data-checked'] = '';
-    return _this49;
+    _this51._statedProp.push('data-checked');
+    _this51._silentProp.push('isOption.');
+    _this51._defaultProp['data-checked'] = '';
+    return _this51;
   }
 
   _createClass2(TOptLi_, [{
@@ -16042,7 +16109,6 @@ var TOptLi_ = function (_TP_10) {
   }, {
     key: '$$onClick',
     value: function $$onClick(event) {
-      if (W.__design__) event.stopPropagation();
       if (this.state.disabled) return;
 
       this.setChecked(null);
@@ -16062,11 +16128,11 @@ var TOptInput_ = function (_TOptSpan_5) {
   function TOptInput_(name, desc) {
     _classCallCheck(this, TOptInput_);
 
-    var _this50 = _possibleConstructorReturn(this, (TOptInput_.__proto__ || Object.getPrototypeOf(TOptInput_)).call(this, name || 'OptInput', desc)); // input.type: checkbox radio button image reset submit
+    var _this52 = _possibleConstructorReturn(this, (TOptInput_.__proto__ || Object.getPrototypeOf(TOptInput_)).call(this, name || 'OptInput', desc)); // input.type: checkbox radio button image reset submit
 
 
-    _this50._htmlText = false;
-    return _this50;
+    _this52._htmlText = false;
+    return _this52;
   }
 
   _createClass2(TOptInput_, [{
@@ -16134,7 +16200,6 @@ var TOptInput_ = function (_TOptSpan_5) {
   }, {
     key: '$$onClick',
     value: function $$onClick(event) {
-      if (W.__design__) event.stopPropagation();
       if (this.state.disabled) return;
 
       var sType = this.state.type;
@@ -16324,10 +16389,10 @@ var TTempPanel_ = function (_TPanel_5) {
   function TTempPanel_(name, desc) {
     _classCallCheck(this, TTempPanel_);
 
-    var _this51 = _possibleConstructorReturn(this, (TTempPanel_.__proto__ || Object.getPrototypeOf(TTempPanel_)).call(this, name || 'TempPanel', desc));
+    var _this53 = _possibleConstructorReturn(this, (TTempPanel_.__proto__ || Object.getPrototypeOf(TTempPanel_)).call(this, name || 'TempPanel', desc));
 
-    _this51._silentProp.push('isTemplate.', 'data-temp.type');
-    return _this51;
+    _this53._silentProp.push('isTemplate.', 'data-temp.type');
+    return _this53;
   }
 
   _createClass2(TTempPanel_, [{
@@ -16404,11 +16469,11 @@ var TTempDiv_ = function (_TUnit_6) {
   function TTempDiv_(name, desc) {
     _classCallCheck(this, TTempDiv_);
 
-    var _this52 = _possibleConstructorReturn(this, (TTempDiv_.__proto__ || Object.getPrototypeOf(TTempDiv_)).call(this, name || 'TempDiv', desc));
+    var _this54 = _possibleConstructorReturn(this, (TTempDiv_.__proto__ || Object.getPrototypeOf(TTempDiv_)).call(this, name || 'TempDiv', desc));
 
-    _this52._silentProp.push('isTemplate.', 'data-temp.type');
-    _this52._htmlText = true;
-    return _this52;
+    _this54._silentProp.push('isTemplate.', 'data-temp.type');
+    _this54._htmlText = true;
+    return _this54;
   }
 
   _createClass2(TTempDiv_, [{
@@ -16480,16 +16545,16 @@ var TTempDiv_ = function (_TUnit_6) {
 T.TempDiv_ = TTempDiv_;
 T.TempDiv = new TTempDiv_();
 
-var TTempSpan_ = function (_TSpan_16) {
-  _inherits(TTempSpan_, _TSpan_16);
+var TTempSpan_ = function (_TSpan_17) {
+  _inherits(TTempSpan_, _TSpan_17);
 
   function TTempSpan_(name, desc) {
     _classCallCheck(this, TTempSpan_);
 
-    var _this53 = _possibleConstructorReturn(this, (TTempSpan_.__proto__ || Object.getPrototypeOf(TTempSpan_)).call(this, name || 'TempSpan', desc));
+    var _this55 = _possibleConstructorReturn(this, (TTempSpan_.__proto__ || Object.getPrototypeOf(TTempSpan_)).call(this, name || 'TempSpan', desc));
 
-    _this53._silentProp.push('isTemplate.', 'data-temp.type');
-    return _this53;
+    _this55._silentProp.push('isTemplate.', 'data-temp.type');
+    return _this55;
   }
 
   _createClass2(TTempSpan_, [{
@@ -16553,11 +16618,11 @@ var TRefDiv_ = function (_TUnit_7) {
   function TRefDiv_(name, desc) {
     _classCallCheck(this, TRefDiv_);
 
-    var _this54 = _possibleConstructorReturn(this, (TRefDiv_.__proto__ || Object.getPrototypeOf(TRefDiv_)).call(this, name || 'RefDiv', desc));
+    var _this56 = _possibleConstructorReturn(this, (TRefDiv_.__proto__ || Object.getPrototypeOf(TRefDiv_)).call(this, name || 'RefDiv', desc));
 
-    _this54._silentProp.push('isReference.');
-    _this54._htmlText = true;
-    return _this54;
+    _this56._silentProp.push('isReference.');
+    _this56._htmlText = true;
+    return _this56;
   }
 
   _createClass2(TRefDiv_, [{
@@ -16608,16 +16673,16 @@ T.RefDiv_ = TRefDiv_;
 T.RefDiv = new TRefDiv_();
 var RefDiv__ = T.RefDiv._createClass(null);
 
-var TRefSpan_ = function (_TSpan_17) {
-  _inherits(TRefSpan_, _TSpan_17);
+var TRefSpan_ = function (_TSpan_18) {
+  _inherits(TRefSpan_, _TSpan_18);
 
   function TRefSpan_(name, desc) {
     _classCallCheck(this, TRefSpan_);
 
-    var _this55 = _possibleConstructorReturn(this, (TRefSpan_.__proto__ || Object.getPrototypeOf(TRefSpan_)).call(this, name || 'RefSpan', desc));
+    var _this57 = _possibleConstructorReturn(this, (TRefSpan_.__proto__ || Object.getPrototypeOf(TRefSpan_)).call(this, name || 'RefSpan', desc));
 
-    _this55._silentProp.push('isReference.');
-    return _this55;
+    _this57._silentProp.push('isReference.');
+    return _this57;
   }
 
   _createClass2(TRefSpan_, [{
@@ -16675,11 +16740,11 @@ var TScenePage_ = function (_TPanel_6) {
   function TScenePage_(name, desc) {
     _classCallCheck(this, TScenePage_);
 
-    var _this56 = _possibleConstructorReturn(this, (TScenePage_.__proto__ || Object.getPrototypeOf(TScenePage_)).call(this, name || 'ScenePage', desc));
+    var _this58 = _possibleConstructorReturn(this, (TScenePage_.__proto__ || Object.getPrototypeOf(TScenePage_)).call(this, name || 'ScenePage', desc));
 
-    _this56._silentProp.push('isScenePage.', 'isTemplate.');
-    _this56._defaultProp.noShow = '';
-    return _this56;
+    _this58._silentProp.push('isScenePage.', 'isTemplate.');
+    _this58._defaultProp.noShow = '';
+    return _this58;
   }
 
   _createClass2(TScenePage_, [{
@@ -17317,13 +17382,13 @@ var TMarkedDiv_ = function (_TDiv_4) {
   function TMarkedDiv_(name, desc) {
     _classCallCheck(this, TMarkedDiv_);
 
-    var _this58 = _possibleConstructorReturn(this, (TMarkedDiv_.__proto__ || Object.getPrototypeOf(TMarkedDiv_)).call(this, name || 'MarkedDiv', desc));
+    var _this60 = _possibleConstructorReturn(this, (TMarkedDiv_.__proto__ || Object.getPrototypeOf(TMarkedDiv_)).call(this, name || 'MarkedDiv', desc));
 
-    _this58._defaultProp.width = null;
-    _this58._defaultProp.minWidth = 20;
-    _this58._defaultProp.noShow = '';
-    _this58._silentProp.push('marked.', 'hasStatic.', 'noSaveChild.');
-    return _this58;
+    _this60._defaultProp.width = null;
+    _this60._defaultProp.minWidth = 20;
+    _this60._defaultProp.noShow = '';
+    _this60._silentProp.push('marked.', 'hasStatic.', 'noSaveChild.');
+    return _this60;
   }
 
   _createClass2(TMarkedDiv_, [{
@@ -17546,10 +17611,10 @@ var TMarkedTable_ = function (_TMarkedDiv_) {
   function TMarkedTable_(name, desc) {
     _classCallCheck(this, TMarkedTable_);
 
-    var _this59 = _possibleConstructorReturn(this, (TMarkedTable_.__proto__ || Object.getPrototypeOf(TMarkedTable_)).call(this, name || 'MarkedTable', desc));
+    var _this61 = _possibleConstructorReturn(this, (TMarkedTable_.__proto__ || Object.getPrototypeOf(TMarkedTable_)).call(this, name || 'MarkedTable', desc));
 
-    _this59._silentProp.push('markedTable.');
-    return _this59;
+    _this61._silentProp.push('markedTable.');
+    return _this61;
   }
 
   _createClass2(TMarkedTable_, [{

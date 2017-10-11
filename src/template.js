@@ -24,7 +24,7 @@ creator.createClass_ = createClass_;
 })(window.location);
 
 utils.version = function() {
-  return '1.1.0';
+  return '1.1.1';
 };
 
 var vendorId_ = (function(sUA) {
@@ -3101,7 +3101,7 @@ function triggerConnTo_(bConn,value,oldValue,sKey) {
 
 function triggerDual_(comp,attr,oldValue) {
   var gui = comp.$gui, bConn = gui.connectTo[attr];
-  if (bConn && gui.compState >= 2) {  // not trigger when first render
+  if (bConn && gui.compState >= 2) { // trigger when duals.xx ready
     setTimeout( function() {
       triggerConnTo_(bConn,comp.state[attr],oldValue,attr);
     },0);
@@ -3201,9 +3201,10 @@ function dualFuncOfGetSet_(comp,attr,superSet,setFn,baseDual) {
       }
     }
     
-    if (triggerLsn) {  // only trigger listen in inner-most setter-func // avoid trigger twice
+    // only trigger listen in inner-most setter-func // avoid trigger twice
+    if (triggerLsn && gui.compState >= 2) { // only when duals.xx ready and not unmount
       var bConn = gui.connectTo[attr];
-      if (bConn && gui.compState >= 2) {  // not trigger when first render
+      if (bConn) {
         setTimeout( function() {
           triggerConnTo_(bConn,comp.state[attr],oldValue,attr);
         },0);
@@ -3221,9 +3222,8 @@ function syncProps_(comp) {
   try {
     if (gui.compState == 0) {
       firstRender = true;
-      gui.compState = 1;    // first render
+      gui.compState = 1;  // first render, if gui.compState = 2 means second or later render
     }
-    else gui.compState = 2; // 2 means second or later render
     
     // setup gui.duals and regist tagAttrs to duals
     var sCtrlFlow = gui.flowFlag;
@@ -3499,8 +3499,11 @@ function syncProps_(comp) {
       while (item = bWaitPass.shift()) {
         duals[item[0]] = item[1];   // assign by setter
       }
+      
+      gui.compState = 2;
     }
     else {  // not first render
+      // gui.compState = 2;  // already is 2
       exprDict = gui.exprAttrs;
       gui.duals_ = null;
       
@@ -3630,7 +3633,7 @@ function syncProps_(comp) {
       }
     }
     
-    if (bConns.length && gui.compState >= 2) {
+    if (bConns.length && gui.compState >= 2) { // not unmount
       setTimeout( function() {
         bConns.forEach( function(item) {
           triggerConnTo_(item[0],item[1],item[2],item[3]); // triggerConnTo_(bConn,value,oldValue,sKey)
@@ -3668,6 +3671,7 @@ function syncProps_(comp) {
     duals.childNumId = gui.comps.length + (gui.removeNum << 16);
   }
   catch(e) {
+    if (firstRender) gui.compState = 2;
     console.log(e);
   }
   
@@ -4017,8 +4021,12 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
       var shadowTemp = getWidgetTempInfo(compObj._);
       var bStated = shadowTemp[1], bSilent = shadowTemp[2];
       bStated.forEach( function(item) {
-        if (hasOwn_.call(dProp,item))  // only fetch back items that in 'link.props'
-          dProp[item] = objState[item];
+        if (hasOwn_.call(dProp,'$'+item)) // such as $width=expr
+          delete dProp[item];
+        else {
+          if (hasOwn_.call(dProp,item))   // only fetch back items that in 'link.props'
+            dProp[item] = objState[item];
+        }
       });
       bSilent.forEach( function(item) {
         delete dProp[item];
@@ -4060,8 +4068,12 @@ function dumpReactTree_(bRet,wdgt,sPath) { // for topmost, bRet[0] is result
     
     Object.assign(dProp,compObj.props);
     bStated.forEach( function(item) {  // NOT take data-* aria-* as stated props
-      // if (hasOwn_.call(dProp,item)) // maybe last time prop.xx is default
-      dProp[item] = objState[item];
+      if (hasOwn_.call(dProp,'$'+item))  // such as $width=expr
+        delete dProp[item];
+      else {
+        // if (hasOwn_.call(dProp,item)) // maybe last time prop.xx is default
+        dProp[item] = objState[item];
+      }
     });
     bSilent.forEach( function(item) {
       delete dProp[item];
@@ -5054,7 +5066,7 @@ function getCompByPath_(entry,sPath_) { // entry is component object
   function doCallback(targ) {
     targ = targ && targ.component;
     if (!targ) {
-      console.log('warning: can not find widget (' + sPath_ + ').');
+      // console.log('warning: can not find widget (' + sPath_ + ').');
       return null;
     }
     else return targ;
@@ -6468,6 +6480,7 @@ class TWidget_ {
       return;
     }
     
+    var virtualKey = this.props['data-rewgt-owner'];
     var b = Object.keys(evSet);
     for (var i=0,sKey; sKey=b[i]; i++) {
       if (sKey[0] != '$') continue;
@@ -6475,15 +6488,11 @@ class TWidget_ {
       if (sKey2[0] == '$') continue;  // ignore $$onXX
       
       var fn = evSet[sKey];
-      if (typeof fn == 'function')
-        this[sKey] = eventset[sKey2] = chainFunc(fn,eventset[sKey2],this);
-    }
-    
-    function chainFunc(fn,oldFn,comp) {
-      return ( function() {
-        fn.apply(comp,arguments);
-        if (oldFn) oldFn.apply(comp,arguments);
-      });
+      if (typeof fn == 'function') {
+        this[sKey] = bindable_(fn)? fn.bind(this): fn;
+        if (typeof this['$'+sKey] != 'function')
+          eventset[sKey2] = wrapCompEvt_(this,sKey2,virtualKey);
+      }
     }
   }
   
@@ -6887,7 +6896,7 @@ class TWidget_ {
           
           if (hasOwn_.call(this.duals,'innerSize')) { // can not assign duals.innerSize, but can trigger listen
             var bConn = gui.connectTo['innerSize'];
-            if (bConn && gui.compState >= 2) { // not trigger when first render
+            if (bConn && gui.compState >= 2) {
               setTimeout( function() {
                 triggerConnTo_(bConn,newSize,oldSize,'innerSize');
               },0);
@@ -7088,25 +7097,6 @@ class TWidget_ {
             if (isTopmost && child.props['isScenePage.'] && child.props.noShow && !W.__design__)
               props['isTemplate.'] = true;
           }
-          else { // paragraph (div p li h1 blockquote ...) or inline widget, convert width/height to style.width/height
-            var isPara = hasClass_(child.props.className,'rewgt-unit');
-            if (!wdAuto_ && wd >= 0) { // for inline widget, suggest no using props.width/height, while used also OK, just convert it to style
-              var childWd_ = wd >= 1? wd + 'px': (wd >= 0.9999? '100%': (wd*100)+'%');
-              props.style = Object.assign({},child.props.style,{width:childWd_});
-              if (isPara) props.width = wd; // for paragraph, still use props.width, no use for inline widget
-            }
-            else {
-              if (isPara) props.width = null;
-            }
-            if (!hiAuto_ && hi >= 0) {
-              var childHi_ = hi >= 1? hi + 'px': (hi >= 0.9999? '100%': (hi*100)+'%');
-              props.style = Object.assign({},child.props.style,{height:childHi_});
-              if (isPara) props.height = hi;
-            }
-            else {
-              if (isPara) props.height = null;
-            }
-          }
           
           if (isScenePage) {
             var dStyle2 = Object.assign({},child.props.style), sLevel = (parseInt(dStyle2.zIndex) || 0) + '';
@@ -7236,9 +7226,12 @@ class TWidget_ {
     
     var bKey = Object.keys(gui.connectBy), bRmv = [];
     for (var i=0,item; item = bKey[i]; i++) {
-      var b = gui.connectBy[item], sour = b[0];
-      if (sour !== this && bRmv.indexOf(sour) < 0)
-        bRmv.push(sour);
+      var b = gui.connectBy[item];
+      for (var i2=0,item2; item2=b[i2]; i2++) {
+        var sour = item2[0];
+        if (sour !== this && bRmv.indexOf(sour) < 0)
+          bRmv.push(sour);
+      }
     }
     for (var i=0,sour; sour = bRmv[i]; i++) {
       sour.unlisten('*',this);
@@ -8966,8 +8959,11 @@ class TSplitDiv_ extends TUnit_ {
     if (this.$onMouseDown) this.$onMouseDown(event);
   }
   
-  $onClick(event) {
-    event.stopPropagation(); // avoid passing click to parent
+  $$onClick(event) {
+    if (W.__design__)
+      event.stopPropagation(); // avoid passing click to parent, make it draggable
+    
+    if (this.$onClick) this.$onClick(event);
   }
 }
 
@@ -9557,7 +9553,49 @@ class TDiv2_ extends TDiv_ {
 T.Div2_ = TDiv2_;
 T.Div2  = new TDiv2_();
 
-var virtualdiv_margin_ = [null,null,null,null];
+function simpleExtends(TBase,sName,noHtml) {
+  class T extends TBase {
+    constructor(name,desc) {
+      super(name || sName,desc);
+      if (noHtml) this._htmlText = false;
+    }
+    
+    getDefaultProps() {
+      var props = super.getDefaultProps();
+      props['tagName.'] = sName.toLowerCase();
+      return props;
+    }
+  }
+  
+  return T;
+}
+
+var null_margin_ = [null,null,null,null];
+
+class TStyle_ extends TDiv2_ {
+  constructor(name,desc) {
+    super(name || 'Style',desc);
+    delete this._defaultProp.minWidth;
+    delete this._defaultProp.minHeight;
+    Object.assign(this._defaultProp, {
+      left:null, top:null, margin:null_margin_.slice(0),
+      padding:null_margin_.slice(0), borderWidth:null_margin_.slice(0),
+    });
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    delete props.minWidth;
+    delete props.minHeight;
+    return Object.assign(props, { 'tagName.':'style',
+      left:null, top:null, margin:null_margin_.slice(0),
+      padding:null_margin_.slice(0), borderWidth:null_margin_.slice(0),
+    });
+  }
+}
+
+T.Style_ = TStyle_;
+T.Style  = new TStyle_();
 
 class TVirtualDiv_ extends TDiv2_ {
   constructor(name,desc) {
@@ -9565,8 +9603,8 @@ class TVirtualDiv_ extends TDiv2_ {
     delete this._defaultProp.minWidth;
     delete this._defaultProp.minHeight;
     Object.assign(this._defaultProp, {
-      left:null, top:null, margin:virtualdiv_margin_.slice(0),
-      padding:virtualdiv_margin_.slice(0), borderWidth:virtualdiv_margin_.slice(0),
+      left:null, top:null, margin:null_margin_.slice(0),
+      padding:null_margin_.slice(0), borderWidth:null_margin_.slice(0),
     });
   }
   
@@ -9575,8 +9613,8 @@ class TVirtualDiv_ extends TDiv2_ {
     delete props.minWidth;
     delete props.minHeight;
     return Object.assign(props, { 'tagName.':'',
-      left:null, top:null, margin:virtualdiv_margin_.slice(0),
-      padding:virtualdiv_margin_.slice(0), borderWidth:virtualdiv_margin_.slice(0),
+      left:null, top:null, margin:null_margin_.slice(0),
+      padding:null_margin_.slice(0), borderWidth:null_margin_.slice(0),
     });
   }
 }
@@ -9608,23 +9646,6 @@ class THiddenDiv_ extends TDiv_ {
 
 T.HiddenDiv_ = THiddenDiv_;
 T.HiddenDiv  = new THiddenDiv_();
-
-function simpleExtends(TBase,sName,noHtml) {
-  class T extends TBase {
-    constructor(name,desc) {
-      super(name || sName,desc);
-      if (noHtml) this._htmlText = false;
-    }
-    
-    getDefaultProps() {
-      var props = super.getDefaultProps();
-      props['tagName.'] = sName.toLowerCase();
-      return props;
-    }
-  }
-  
-  return T;
-}
 
 T.Article_ = simpleExtends(TDiv_,'Article');
 T.Article  = new T.Article_();
@@ -10562,7 +10583,7 @@ class TImg_ extends TSpan_ {
   $$onDragStart(event) {
     if (W.__design__) {
       event.preventDefault();  // disable img draggable
-      return;
+      return;  // avoid deep customizing
     }
     if (this.$onDragStart)
       this.$onDragStart(event);
@@ -10811,8 +10832,42 @@ class TOptgroup_ extends TSpan_ {
 T.Optgroup_ = TOptgroup_;
 T.Optgroup  = new TOptgroup_();
 
-T.Option_ = simpleExtends(TSpan_,'Option');
-T.Option  = new T.Option_();
+/*
+function fireOption_(comp) {  // comp is Option or OptOption
+  var owner = comp.parentOf(true);
+  if (owner) {
+    if (owner.props['tagName.'] == 'optgroup')
+      owner = owner.parentOf(true);
+  }
+  if (owner && owner.props['tagName.'] == 'select' && !owner.props.multiple) {
+    var node = owner.getHtmlNode()
+    if (node)
+      node.value = comp.state.value; // fire it by manual, since event.preventDefault() called
+  }
+} */
+
+class TOption_ extends TSpan_ {
+  constructor(name,desc) {
+    super(name || 'Option',desc);
+  }
+  
+  getDefaultProps() {
+    var props = super.getDefaultProps();
+    props['tagName.'] = 'option';
+    return props;
+  }
+  
+  $$onClick(event) {
+    if (W.__design__) {
+      event.preventDefault();
+      // fireOption_(this);
+    }
+    if (this.$onClick) this.$onClick(event);
+  }
+}
+
+T.Option_ = TOption_;
+T.Option  = new TOption_();
 
 T.B_ = simpleExtends(TSpan_,'B');
 T.B  = new T.B_();
@@ -10897,14 +10952,9 @@ function navSetChecked_(comp,checkedId,callback) {
   var gui = comp.$gui;
   if (checkedId && gui.compState) { // if compState == 0, not ready yet
     var navKey = gui.navSubkey;
-    var oldId = comp.state.checkedId;
-    if (gui.navItems[checkedId]) {  // is valid checkedId
-      if (!disableSwitch(oldId,checkedId)) {
-        setAndTrigger(oldId,checkedId); // set immediately
-        comp.reRender(callback);    // auto choose checkedId GroundXX to render out
-        return;
-      }
-    }
+    var oldId = comp.state.checkedId, beTrigger = false;
+    if (gui.navItems[checkedId])    // is valid checkedId
+      beTrigger = true;
     else if (navKey) {
       var widget = comp.widget, subNav = widget && widget[navKey];
       subNav = subNav && subNav.component;
@@ -10913,6 +10963,15 @@ function navSetChecked_(comp,checkedId,callback) {
         subNav.fireChecked(checkedId,callback);
         return;
       }
+    }
+    else {
+      if (Object.keys(gui.navItems).length == 0) // if no sub-nav and no GroundXX, using as opt-group
+        beTrigger = true;
+    }
+    if (beTrigger && !disableSwitch(oldId,checkedId)) {
+      setAndTrigger(oldId,checkedId); // set immediately
+      comp.reRender(callback);  // auto choose checkedId GroundXX to render out
+      return;
     }
     
     // set checkedId even if switch ground failed, but not trigger duals.checkedId
@@ -11548,8 +11607,6 @@ class TOptSpan_ extends TSpan_ {
   }
   
   $$onClick(event) {
-    if (W.__design__)
-      event.stopPropagation();
     if (this.state.disabled) return;
     
     this.setChecked(null);
@@ -11692,6 +11749,11 @@ class TOptOption_ extends TOptSpan_ {
   }
   
   $$onClick(event) {  // overwrite super.$$onClick
+    if (W.__design__) {
+      event.preventDefault();
+      // fireOption_(this);
+    }
+    
     if (this.$onClick) this.$onClick(event);
   }
 }
@@ -11745,8 +11807,6 @@ class TOptDiv_ extends TDiv_ {
   }
   
   $$onClick(event) {
-    if (W.__design__)
-      event.stopPropagation();
     if (this.state.disabled) return;
     
     this.setChecked(null);
@@ -11803,8 +11863,6 @@ class TOptLi_ extends TP_ {
   }
   
   $$onClick(event) {
-    if (W.__design__)
-      event.stopPropagation();
     if (this.state.disabled) return;
     
     this.setChecked(null);
@@ -11884,8 +11942,6 @@ class TOptInput_ extends TOptSpan_ {
   }
   
   $$onClick(event) {
-    if (W.__design__)
-      event.stopPropagation();
     if (this.state.disabled) return;
     
     var sType = this.state.type;

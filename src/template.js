@@ -24,7 +24,7 @@ creator.createClass_ = createClass_;
 })(window.location);
 
 utils.version = function() {
-  return '1.1.1';
+  return '1.1.2';
 };
 
 var vendorId_ = (function(sUA) {
@@ -252,6 +252,60 @@ function identicalId() {
   return ++identicalId_;
 }
 utils.identicalId = identicalId;
+
+utils.update = function(comp,sAttr,modifier) {
+  if (!modifier) return;  // return undefined
+  return comp.duals[sAttr] = ex.update(comp.state[sAttr],modifier);
+};
+
+utils.waitAll = function() {  // waitAll(comp1,attr1,comp2,attr2, ... , callback,times)
+  var received = [], expected = [], callback = null, times = 1;
+  
+  var i = 0;
+  while (true) {
+    var comp = arguments[i], sAttr = arguments[i+1], tp = typeof sAttr;
+    if (tp == 'string') {
+      var fn = listener.bind(comp);
+      expected.push([comp,sAttr,fn]);
+      comp.listen(sAttr,fn);
+      i += 2;
+    }
+    else {
+      if (tp == 'number') times = sAttr;  // if times == 0 means trigger forever
+      if (typeof comp == 'function') callback = comp;
+      break;
+    }
+  }
+  
+  if (!callback)
+    console.log('warning: no callback passed in waitAll()');
+  
+  function listener(value,oldValue,attr) {
+    for (var i=0, item; item=expected[i]; i++) {
+      if (item[0] === this && item[1] === attr) {
+        received[i] = value;
+        break;
+      }
+    }
+    for (var i2 = expected.length-1; i2 >= 0; i2--) {
+      if (received[i2] === undefined) return;  // not all received
+    }
+    
+    if (times > 0) {
+      times -= 1;
+      if (times <= 0) {
+        for (var i3 = expected.length-1; i3 >= 0; i3--) {
+          var item = expected[i3], comp = item[0];
+          comp.unlisten(item[1],item[2]);
+        }
+      }
+    }
+    
+    var args = received;
+    received = [];  // for next loop
+    if (callback) callback.apply(null,args);
+  }
+};
 
 function classNameOf_(comp) {
   var s = comp.$gui.className, s2 = comp.state.klass;

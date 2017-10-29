@@ -6,26 +6,6 @@ suports visual progamming also.
 
 Last stable version: v1.1
 
-### Install
-
-```
-mkdir user
-cd user
-git clone https://github.com/rewgt/shadow-server.git
-```
-
-### Start local server
-
-```
-cd shadow-server
-npm install
-npm start
-```
-
-### User manual
-
-<a target="_blank" href="https://rewgt.github.io/shadow-server/public/static/files/rewgt/doc/doc_zh/github_doc.html">Shadow Widget User Manual (in Chinese)</a>
-
 Please refer to [shadow-server](https://github.com/rewgt/shadow-server) project, which provides development environment, and includes cdn-library of `shadow-widget`.
 
 ### BSD License

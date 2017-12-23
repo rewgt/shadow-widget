@@ -1,6 +1,6 @@
 // index_dev.js
 // for dev package of shadow-widget, released with react & react-dom
-// package by: browserify src/index_dev.js -o bundle.js -t [ babelify --compact false --presets [ es2015 react ] ]
+// package by: browserify src/index_dev.js -o bundle.js -t [ babelify --compact false --presets [ env react ] ]
 
 'use strict';
 

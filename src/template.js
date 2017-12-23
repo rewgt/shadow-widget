@@ -24,7 +24,7 @@ creator.createClass_ = createClass_;
 })(window.location);
 
 utils.version = function() {
-  return '1.1.2';
+  return '1.1.3';
 };
 
 var vendorId_ = (function(sUA) {
@@ -1010,12 +1010,16 @@ ex.regist('__debug__', function() {
   return parseInt(W.__debug__ || 0);
 });
 
+var ex_time_ = {};
+
 ex.regist('time', function(tm) {
-  var t;
-  if (tm)
-    t = new Date(tm);
-  else t = new Date();
-  return t.valueOf();
+  if (tm) {
+    tm = tm + '';
+    var i = (ex_time_[tm] || 0) + 1;
+    ex_time_[tm] = i;
+    return i;
+  }
+  else return (new Date()).valueOf();
 });
 
 ex.regist('isFalse', function(b) {

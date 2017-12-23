@@ -1,6 +1,6 @@
 // index_cdn.js
 // for cdn package of shadow-widget, exclude react & react-dom
-// package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ es2015 react ] ]
+// package by: browserify -u react -u react-dom src/index_cdn.js -o src/bundle_cdn.js -t [ babelify --compact false --presets [ env react ] ]
 
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 (function (process){
@@ -3773,7 +3773,7 @@ creator.createClass_ = createClass_;
 })(window.location);
 
 utils.version = function () {
-  return '1.1.2';
+  return '1.1.3';
 };
 
 var vendorId_ = function (sUA) {
@@ -4737,10 +4737,15 @@ ex.regist('__debug__', function () {
   return parseInt(W.__debug__ || 0);
 });
 
+var ex_time_ = {};
+
 ex.regist('time', function (tm) {
-  var t;
-  if (tm) t = new Date(tm);else t = new Date();
-  return t.valueOf();
+  if (tm) {
+    tm = tm + '';
+    var i = (ex_time_[tm] || 0) + 1;
+    ex_time_[tm] = i;
+    return i;
+  } else return new Date().valueOf();
 });
 
 ex.regist('isFalse', function (b) {

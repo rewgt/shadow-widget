@@ -1,6 +1,6 @@
 {
   "name": "shadow-widget",
-  "version": "1.1.3.1",
+  "version": "1.1.4",
   "description": "Yet another 'react + reflux + react-router', more simple and powerful, suports visual progamming.",
   "main": "index.js",
   "scripts": {

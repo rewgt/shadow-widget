@@ -217,9 +217,16 @@ function keyOfNode_(node) {
         return '';
       }
       
-      getKeyFromNode_ = function(node) {
-        return keyidOf(node[internalDomKey_]);
-      };
+      if (parseInt(React.version.split('.')[0]) >= 16) {
+        getKeyFromNode_ = function(node) {
+          return keyidOf2(node[internalDomKey_]);
+        };
+      }
+      else {
+        getKeyFromNode_ = function(node) {
+          return keyidOf(node[internalDomKey_]);
+        };
+      }
     }
   }
   
@@ -237,6 +244,13 @@ function keyOfNode_(node) {
     var comp = owner && owner._instance;
     var gui = comp && comp.$gui;
     return gui? (gui.keyid+''): '';
+  }
+  
+  function keyidOf2(internal) {  // for v16+
+    var ele = internal && internal['return'];
+    var comp = ele && ele.stateNode;
+    var gui = comp && comp.$gui;
+    return gui ? gui.keyid + '' : '';
   }
 }
 
